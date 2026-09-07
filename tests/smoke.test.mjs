@@ -120,6 +120,23 @@ test('merge keeps a local edit that is newer than the remote copy', () => {
   assert.equal(changed, 0);
 });
 
+test('동기화 건수는 삭제 표식을 빼고 센다', () => {
+  // 병합 결과에는 삭제 표식이 남아 전파되지만, 사용자가 가진 기록 수는 아니다.
+  const merged = mergeRecords(
+    [
+      normalise({ ...base, id: 'a' }),
+      normalise({ ...base, id: 'b' }),
+      normalise({ ...base, id: 'c', deleted: true }),
+    ],
+    [
+      normalise({ ...base, id: 'd', deleted: true }),
+      normalise({ ...base, id: 'e', deleted: true }),
+    ],
+  );
+  assert.equal(merged.records.length, 5);
+  assert.equal(merged.records.filter((r) => !r.deleted).length, 2);
+});
+
 test('merge is idempotent, so repeated syncs converge', () => {
   const mine = [normalise({ ...base, updatedAt: 100 })];
   const theirs = [normalise({ ...base, id: 'b', updatedAt: 200 })];
