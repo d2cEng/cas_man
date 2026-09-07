@@ -90,7 +90,8 @@ python3 -m http.server 8080
 기록은 본인 계정 아래에만 저장됩니다.
 
 ```
-users/{uid}/cashman/{recordId}
+users/{uid}/cashman/{recordId}            기록
+users/{uid}/cashman_deletions/{recordId}  삭제 로그 (id + 삭제시각, 90일 후 자동 정리)
 ```
 
 `apiKey` 가 저장소에 그대로 있는 것은 정상입니다. 접근 제어는 키가 아니라 **Firestore 보안
@@ -112,8 +113,9 @@ users/{uid}/cashman/{recordId}
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{uid}/cashman/{recordId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+    match /users/{uid}/{collection}/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid
+        && collection in ['cashman', 'cashman_deletions'];
     }
   }
 }
@@ -132,16 +134,22 @@ service cloud.firestore {
 있다가(오프라인에서 지운 경우), 클라우드 사본이 사라지면 그 id도 버립니다. 이 대기열이 없으면
 동기화가 "내게 없는 새 기록"으로 보고 도로 받아옵니다.
 
-반대 방향 — **다른 기기가 지운 것** — 은 마지막 동기화 시각으로 가려냅니다. 클라우드에 없는
-로컬 기록을 만나면 그 기록의 `updatedAt` 을 이 기기의 마지막 동기화 시각과 비교합니다.
+### 삭제 로그
 
-| 기록 | 뜻 | 처리 |
-|---|---|---|
-| `updatedAt ≤ 마지막 동기화` | 예전에 이미 올렸던 것 | 다른 기기가 지웠다 → 지운다 |
-| `updatedAt > 마지막 동기화` | 아직 못 올린 새 기록 | 올린다 |
+지운 기록은 바로 사라지지만, **id 와 삭제 시각만** 따로 남깁니다. 기록 본문이 아니라 약 50바이트
+짜리 항목이고(기록 한 건은 ~200바이트), **90일이 지나면 양쪽에서 자동 정리**됩니다.
 
-둘 다 **같은 기기의 시계**라 기기 간 시계 오차를 타지 않습니다. 첫 동기화(마지막 동기화 = 0)
-에서는 아무것도 지우지 않습니다.
+이 로그가 있어야 `삭제` 와 `수정` 이 부딪혔을 때 판단할 수 있습니다.
+
+| 상황 | 결과 |
+|---|---|
+| 삭제 시각 < 수정 시각 | 수정이 나중이므로 **되살립니다** (로그 항목도 폐기) |
+| 삭제 시각 > 수정 시각 | 삭제가 나중이므로 **지웁니다** |
+
+로그가 만료됐거나 애초에 없던 경우를 위한 보루로 **마지막 동기화 시각**도 함께 봅니다. 클라우드에
+없는 로컬 기록의 `updatedAt` 이 마지막 동기화보다 이전이면 그때 클라우드에 있었다는 뜻이므로 다른
+기기가 지운 것이고, 이후면 아직 못 올린 새 기록입니다. 이 둘은 **같은 기기의 시계**라 시계 오차를
+타지 않고, 첫 동기화(마지막 동기화 = 0)에서는 아무것도 지우지 않습니다.
 
 > 이 규칙 때문에, 클라우드가 통째로 비면 이 기기의 기록도 지워집니다. 한 기기에서 "모든 기록
 > 삭제" 를 하면 다른 기기에도 전파되는 것이 의도된 동작입니다. 중요한 시점에는 **JSON 백업**을
