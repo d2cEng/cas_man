@@ -1,6 +1,6 @@
 // CSV / JSON export and import.
 
-import { contentId, normalise, signedAmount, typeFromRow } from './store.js';
+import { contentId, directionFromRow, normalise, signedAmount, typeFromRow } from './store.js';
 
 // Exactly the 거래내역 columns of the 일본 자산 관리 workbook, in order and nothing
 // else. The file is meant to land in archive/ as a source original and be read
@@ -170,6 +170,8 @@ function fromCsv(text) {
       account: at(cells, '계좌'),
       amount: signed,
       type: typeFromRow(signed, category),
+      // The sign is what tells the two halves of a 이체 apart on the way back in.
+      direction: directionFromRow(signed),
       category,
       payee: at(cells, '거래처'),
       memo: at(cells, '비고'),
