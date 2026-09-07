@@ -15,6 +15,7 @@ import {
   allRaw,
   newId as newGroupId,
   putMany,
+  signedAmount,
   onChange,
   wipe,
 } from './store.js';
@@ -130,6 +131,7 @@ function renderTypeToggle() {
   // 이체 needs the account on the other side, and may carry an ATM fee.
   const isTransfer = state.type === 'transfer';
   $('field-counter-account').hidden = !isTransfer;
+  $('swap-accounts').hidden = !isTransfer;
   $('field-fee').hidden = !isTransfer;
   $('field-account').setAttribute('aria-label', isTransfer ? '보내는 계좌' : '계좌');
 
@@ -186,14 +188,24 @@ function renderCategories() {
   }
 }
 
+/** Which accounts a fresh entry of this 구분 starts on. */
+function applyAccountDefaults() {
+  if (state.type === 'transfer') {
+    state.account = state.settings.transferFrom || state.settings.defaultAccount;
+    state.counterAccount = state.settings.transferTo || '';
+  } else {
+    state.account = state.settings.defaultAccount;
+    state.counterAccount = '';
+  }
+  renderAccounts();
+}
+
 function resetEntry() {
   state.amount = 0;
   state.editingId = null;
   state.editingGroup = null;
-  state.account = state.settings.defaultAccount;
-  state.counterAccount = '';
   $('field-fee').value = '';
-  renderAccounts();
+  applyAccountDefaults();
   $('field-payee').value = '';
   $('field-memo').value = '';
   $('field-date').value = toLocalInput(Date.now());
@@ -350,6 +362,47 @@ function visibleRows(records) {
   return records.filter((r) => !(r.type === 'transfer' && r.group && r.direction === 'in'));
 }
 
+/**
+ * Running balance per 계좌, over every record rather than the shown month —
+ * this is "what is in the account right now", which is the number that tells
+ * you whether the cash in your pocket matches the ledger.
+ */
+function renderBalances() {
+  const totals = new Map();
+  for (const record of state.records) {
+    totals.set(record.account, (totals.get(record.account) || 0) + signedAmount(record));
+  }
+
+  const host = $('balances');
+  host.textContent = '';
+
+  const entries = [...totals.entries()]
+    .filter(([, value]) => value !== 0)
+    // Cash first — it is what this ledger exists to track.
+    .sort(([a, av], [b, bv]) =>
+      a === '현금' ? -1 : b === '현금' ? 1 : Math.abs(bv) - Math.abs(av),
+    );
+
+  // Only worth the caption once something other than cash is on screen.
+  $('balances-note').hidden = !entries.some(([account]) => account !== '현금');
+
+  for (const [account, value] of entries) {
+    const chip = document.createElement('div');
+    chip.className = `balance${account === '현금' ? ' balance--cash' : ''}`;
+
+    const name = document.createElement('span');
+    name.className = 'balance__name';
+    name.textContent = account;
+
+    const amount = document.createElement('span');
+    amount.className = `balance__value${value < 0 ? ' balance__value--negative' : ''}`;
+    amount.textContent = money(value);
+
+    chip.append(name, amount);
+    host.appendChild(chip);
+  }
+}
+
 function renderHistory() {
   const d = new Date(state.month);
   $('month-label').textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
@@ -361,6 +414,8 @@ function renderHistory() {
   $('sum-expense').textContent = num.format(expense);
   $('sum-income').textContent = num.format(income);
   $('sum-net').textContent = num.format(income - expense);
+
+  renderBalances();
 
   const host = $('history-list');
   host.textContent = '';
@@ -496,15 +551,9 @@ function renderAccountEditor() {
 }
 
 function renderDefaultAccount() {
-  const select = $('setting-default-account');
-  select.textContent = '';
-  for (const name of state.settings.accounts) {
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
-    select.appendChild(option);
-  }
-  select.value = state.settings.defaultAccount;
+  fillAccountSelect($('setting-default-account'), state.settings.defaultAccount);
+  fillAccountSelect($('setting-transfer-from'), state.settings.transferFrom, '선택 안 함');
+  fillAccountSelect($('setting-transfer-to'), state.settings.transferTo, '선택 안 함');
 }
 
 function renderSyncState() {
@@ -734,6 +783,8 @@ function wire() {
   for (const button of document.querySelectorAll('.typetoggle__btn')) {
     button.addEventListener('click', () => {
       state.type = button.dataset.type;
+      // Editing keeps the row's own accounts; only a fresh entry gets defaults.
+      if (!state.editingId) applyAccountDefaults();
       renderTypeToggle();
     });
   }
@@ -870,14 +921,34 @@ function wire() {
 
   $('setting-default-account').addEventListener('change', (event) => {
     state.settings = saveSettings({ defaultAccount: event.target.value });
-    if (!state.editingId) {
-      state.account = event.target.value;
-      renderAccounts();
-    }
+    if (!state.editingId) applyAccountDefaults();
   });
+
+  for (const [id, key] of [
+    ['setting-transfer-from', 'transferFrom'],
+    ['setting-transfer-to', 'transferTo'],
+  ]) {
+    $(id).addEventListener('change', (event) => {
+      state.settings = saveSettings({ [key]: event.target.value });
+      if (!state.editingId) applyAccountDefaults();
+    });
+  }
 
   $('field-account').addEventListener('change', (event) => {
     state.account = event.target.value;
+  });
+
+  $('swap-accounts').addEventListener('click', () => {
+    const from = $('field-account').value;
+    const to = $('field-counter-account').value;
+    if (!to) {
+      toast('받는 계좌를 먼저 선택하세요', 'warn');
+      return;
+    }
+    state.account = to;
+    state.counterAccount = from;
+    renderAccounts();
+    toast(`${to} → ${from}`);
   });
 
   for (const id of ['widget-amount', 'widget-category', 'widget-account', 'widget-instant']) {
@@ -918,7 +989,6 @@ async function main() {
 
   renderKeypadStep();
   renderTypeToggle();
-  renderAccounts();
   renderCategories();
   resetEntry();
   renderSyncState();

@@ -19,7 +19,7 @@
 
     <header class="appbar">
       <h1 class="appbar__title">현금장부</h1>
-      <button class="appbar__sync" id="sync-button" type="button" title="구글 드라이브와 동기화">
+      <button class="appbar__sync" id="sync-button" type="button" title="클라우드와 동기화">
         <span class="appbar__sync-dot" id="sync-dot"></span>
         <span id="sync-label">로컬</span>
       </button>
@@ -43,13 +43,16 @@
           <div class="entry__fields">
             <select class="field" id="field-account" aria-label="계좌"></select>
             <select class="field" id="field-counter-account" aria-label="상대 계좌" hidden></select>
+            <button class="btn btn--ghost" id="swap-accounts" type="button" hidden>
+              ⇅ 보내는 ↔ 받는 바꾸기
+            </button>
             <input
               class="field"
               id="field-fee"
               type="number"
               inputmode="numeric"
               min="0"
-              placeholder="수수료 (예: ATM 220)"
+              placeholder="수수료 (선택, 예: 220)"
               autocomplete="off"
               hidden
             />
@@ -115,6 +118,12 @@
           </div>
         </div>
 
+        <div class="balances" id="balances"></div>
+        <p class="balances__note" id="balances-note" hidden>
+          이 앱에 입력한 기록만의 합계입니다. 은행·카드 계좌는 기초 잔액이 빠져 있어 실제 잔고와
+          다릅니다.
+        </p>
+
         <input
           class="field field--search"
           id="search"
@@ -132,8 +141,8 @@
           <summary class="card__title">클라우드 동기화</summary>
           <p class="card__note">
             구글 계정으로 로그인하면 기록이 본인 Firestore 영역
-            <code>users/{uid}/cashman</code> 에 저장되어 기기 간에 동기화됩니다. 일본어 퀴즈 앱과
-            같은 프로젝트·같은 계정을 쓰므로 따로 설정할 것이 없습니다.
+            <code>users/{uid}/cashman</code> 에 저장되어 기기 간에 동기화됩니다. 본인 계정 아래에만
+            저장되며, 다른 사람은 읽을 수 없습니다.
           </p>
           <div class="row">
             <button class="btn" id="sync-connect" type="button">구글 로그인</button>
@@ -148,7 +157,7 @@
               <a id="rules-console-link" href="#" target="_blank" rel="noopener">Firebase 콘솔 → 규칙</a>
               의 <code>match /databases/{database}/documents</code> 안쪽에 추가하고 게시하세요.
               기존 규칙은 그대로 두면 됩니다 — 규칙은 OR로 평가되어, 새 경로용 허용을 더하는 것이
-              기존 권한을 좁히거나 퀴즈 앱을 깨뜨리지 않습니다.
+              기존 권한을 좁히지 않습니다.
             </p>
             <code class="codebox" id="rules-snippet"></code>
             <div class="row">
@@ -219,8 +228,12 @@
 
         <details class="card">
           <summary class="card__title">계좌 관리</summary>
-          <label class="label" for="setting-default-account">기본 계좌</label>
+          <label class="label" for="setting-default-account">기본 계좌 (지출·수입)</label>
           <select class="field" id="setting-default-account"></select>
+          <label class="label" for="setting-transfer-from">이체 기본 — 보내는 계좌</label>
+          <select class="field" id="setting-transfer-from"></select>
+          <label class="label" for="setting-transfer-to">이체 기본 — 받는 계좌</label>
+          <select class="field" id="setting-transfer-to"></select>
           <div class="chips chips--editable" id="account-editor"></div>
           <div class="row">
             <input class="field" id="new-account" type="text" placeholder="새 계좌" autocomplete="off" />
