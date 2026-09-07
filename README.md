@@ -85,18 +85,28 @@ users/{uid}/books/{bookId}          ← 퀴즈 앱 (별개, 서로 건드리지 
 `apiKey` 가 저장소에 그대로 있는 것은 정상입니다. 접근 제어는 키가 아니라 **Firestore 보안
 규칙**이 합니다.
 
-### 보안 규칙 확인
+### 보안 규칙 (최초 1회)
 
-퀴즈 앱 규칙이 아래처럼 `users/{uid}` **하위 전체**를 허용하고 있으면 그대로 동작합니다.
+퀴즈 앱 규칙이 `books` 만 허용하고 있으면 `cashman` 쓰기가 막힙니다. 그때 앱이 설정 화면에
+**붙여넣을 규칙과 콘솔 링크를 그대로 띄워줍니다.** 콘솔 → Firestore → 규칙에서
+`match /databases/{database}/documents` **안쪽에** 추가하고 게시하세요.
+
+```
+match /users/{uid}/cashman/{recordId} {
+  allow read, write: if request.auth != null && request.auth.uid == uid;
+}
+```
+
+**기존 규칙은 그대로 두면 됩니다.** Firestore 규칙은 OR로 평가되므로, 새 경로용 허용을 더하는
+것은 기존 권한을 좁히거나 퀴즈 앱을 깨뜨릴 수 없습니다. 본인 `uid` 아래에만 열립니다.
+
+앞으로 앱을 더 붙일 생각이면 기존 `users` 블록을 아래로 넓혀두는 것도 방법입니다.
 
 ```
 match /users/{uid}/{document=**} {
   allow read, write: if request.auth != null && request.auth.uid == uid;
 }
 ```
-
-규칙이 `books` 만 콕 집어 허용하고 있다면 `cashman` 을 추가해야 합니다. 권한이 없으면 앱이
-`Firestore 보안 규칙이 이 앱의 쓰기를 막고 있습니다` 라고 알려줍니다.
 
 ### 충돌 처리
 

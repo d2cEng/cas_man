@@ -586,3 +586,15 @@ body[data-type='income'] .amount {
     transition: none !important;
   }
 }
+
+.card__note--warn {
+  padding: 10px 12px;
+  border-left: 3px solid var(--danger);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--text);
+}
+
+.codebox {
+  white-space: pre-wrap;
+}

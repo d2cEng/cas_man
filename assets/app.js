@@ -21,7 +21,9 @@ import {
   connect,
   disconnect,
   isConnected,
+  REQUIRED_RULE,
   restore,
+  RULES_CONSOLE_URL,
   sync,
   SyncError,
 } from './sync.js';
@@ -539,8 +541,13 @@ async function runSync({ interactive }) {
   try {
     const result = interactive && !isConnected() ? await connect() : await sync({ interactive });
     state.settings = loadSettings();
+    $('rules-help').hidden = true;
     if (interactive) toast(`동기화 완료 · ${num.format(result.total)}건`, 'ok');
   } catch (error) {
+    if (error?.needsRules) {
+      $('rules-help').hidden = false;
+      showView('settings');
+    }
     if (interactive || !(error instanceof SyncError && error.needsConsent)) {
       toast(error instanceof SyncError ? error.message : '동기화에 실패했습니다', 'warn');
     }
@@ -658,6 +665,17 @@ function wire() {
     renderKeypadStep();
     renderAmount();
     renderHistory();
+  });
+
+  $('rules-snippet').textContent = REQUIRED_RULE;
+  $('rules-console-link').href = RULES_CONSOLE_URL;
+  $('rules-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(REQUIRED_RULE);
+      toast('규칙을 복사했습니다', 'ok');
+    } catch {
+      toast('복사할 수 없습니다. 길게 눌러 선택하세요', 'warn');
+    }
   });
 
   $('sync-connect').addEventListener('click', () => runSync({ interactive: true }));
