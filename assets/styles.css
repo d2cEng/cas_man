@@ -651,3 +651,38 @@ body[data-type='income'] .amount {
   line-height: 1.45;
   color: var(--muted);
 }
+
+/* ── install banner ──────────────────────────────────────────────────── */
+
+.installbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 560px;
+  margin: 8px auto 0;
+  padding: 10px 12px;
+  border: 1px solid var(--brand);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+
+.installbar__text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.installbar__cta {
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.installbar__close {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}

@@ -274,18 +274,20 @@ async function saveTransfer(common) {
 
   const existing = state.editingGroup || [];
   const group = existing[0]?.group || newGroupId();
-  const idFor = (direction) =>
-    existing.find((r) => r.direction === direction)?.id || newId();
+  const half = (direction) =>
+    existing.find((r) => r.type === 'transfer' && r.direction === direction);
+  const existingFee = existing.find((r) => r.type === 'expense');
 
-  await putMany([
-    { ...common, id: idFor('out'), account: from, category: '이체', group, direction: 'out' },
-    { ...common, id: idFor('in'), account: to, category: '이체', group, direction: 'in' },
-  ]);
+  const rows = [
+    { ...common, id: half('out')?.id || newId(), account: from, category: '이체', group, direction: 'out' },
+    { ...common, id: half('in')?.id || newId(), account: to, category: '이체', group, direction: 'in' },
+  ];
 
   const fee = Math.round(Math.abs(Number($('field-fee').value) || 0));
   if (fee > 0) {
-    await put({
-      ts: common.ts,
+    rows.push({
+      ...common,
+      id: existingFee?.id || newId(),
       // The fee is charged on the account the money left.
       account: from,
       amount: fee,
@@ -293,9 +295,14 @@ async function saveTransfer(common) {
       category: state.settings.feeCategory,
       payee: common.payee || 'ATM',
       memo: [common.memo, '수수료'].filter(Boolean).join(' '),
-      source: state.settings.source,
+      group,
     });
+  } else if (existingFee) {
+    // The fee was cleared while editing — drop it rather than orphan it.
+    rows.push({ ...existingFee, deleted: true });
   }
+
+  await putMany(rows.map((r) => ({ ...r, updatedAt: Date.now() })));
 
   const note = fee > 0 ? ` (수수료 ${money(fee)} 별도 기록)` : '';
   toast(
@@ -309,20 +316,29 @@ async function saveTransfer(common) {
 async function editRecord(record) {
   state.editingId = record.id;
   state.editingGroup = null;
+  state.counterAccount = '';
+  $('field-fee').value = '';
+
+  // Tapping any row of a 이체 — either half, or its fee — edits the whole
+  // movement, so the date and everything else stay in step across all of them.
+  if (record.group) {
+    const members = await groupOf(record.id);
+    const out = members.find((r) => r.type === 'transfer' && r.direction === 'out');
+    const into = members.find((r) => r.type === 'transfer' && r.direction === 'in');
+    const fee = members.find((r) => r.type === 'expense');
+
+    if (out) {
+      state.editingGroup = members;
+      state.counterAccount = into?.account || '';
+      if (fee) $('field-fee').value = fee.amount;
+      record = out; // the outgoing half drives the form
+    }
+  }
+
   state.type = record.type;
   state.amount = record.amount;
   state.category = record.category;
   state.account = record.account;
-  state.counterAccount = '';
-  $('field-fee').value = '';
-
-  if (record.type === 'transfer' && record.group) {
-    // Edit the pair as one movement, whichever half was tapped.
-    const pair = await groupOf(record.id);
-    state.editingGroup = pair;
-    state.account = pair.find((r) => r.direction === 'out')?.account || record.account;
-    state.counterAccount = pair.find((r) => r.direction === 'in')?.account || '';
-  }
 
   renderAccounts();
   $('field-payee').value = record.payee;
@@ -350,8 +366,13 @@ function monthRecords() {
 
 /** The 계좌 on the other side of a 이체, for display. */
 function counterpartOf(record) {
-  if (!record.group) return '';
-  return state.records.find((r) => r.group === record.group && r.id !== record.id)?.account || '';
+  if (record.type !== 'transfer' || !record.group) return '';
+  // The group also holds any fee row, so match the opposite half specifically.
+  return (
+    state.records.find(
+      (r) => r.group === record.group && r.type === 'transfer' && r.direction !== record.direction,
+    )?.account || ''
+  );
 }
 
 /**
@@ -630,15 +651,36 @@ function isStandalone() {
   );
 }
 
+const INSTALL_DISMISSED_KEY = 'cas_man.installDismissed';
+
+function bannerDismissed() {
+  try {
+    return localStorage.getItem(INSTALL_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function renderInstallState() {
   const button = $('install-button');
   const note = $('install-note');
+  const bar = $('install-bar');
+  const card = $('install-card');
+
+  // The banner is the discoverable path — a button buried in a collapsed
+  // settings card is one nobody finds.
+  bar.hidden = !installPrompt || isStandalone() || bannerDismissed();
 
   if (isStandalone()) {
     button.hidden = true;
+    card.open = false;
     note.textContent = '이미 설치되어 있습니다.';
     return;
   }
+
+  // Not installed yet, so leave the card open rather than making them hunt.
+  card.open = true;
+
   if (installPrompt) {
     button.hidden = false;
     note.textContent =
@@ -651,7 +693,17 @@ function renderInstallState() {
   const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
   note.textContent = iOS
     ? 'Safari에서 공유 버튼 → "홈 화면에 추가" 를 누르세요.'
-    : '브라우저 메뉴(⋮)에서 "앱 설치" 또는 "홈 화면에 추가" 를 누르세요. 크롬에서는 잠시 뒤 이 버튼이 나타납니다.';
+    : '크롬 메뉴(⋮) → "앱 설치" 또는 "홈 화면에 추가" 를 누르세요. 조건이 갖춰지면 여기에도 설치 버튼이 나타납니다.';
+}
+
+async function promptInstall() {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  const { outcome } = await installPrompt.userChoice;
+  // The event is single-use, whichever way the user answered.
+  installPrompt = null;
+  renderInstallState();
+  if (outcome === 'dismissed') toast('설치를 취소했습니다');
 }
 
 function wireInstall() {
@@ -667,14 +719,16 @@ function wireInstall() {
     toast('홈 화면에 설치했습니다', 'ok');
   });
 
-  $('install-button').addEventListener('click', async () => {
-    if (!installPrompt) return;
-    installPrompt.prompt();
-    const { outcome } = await installPrompt.userChoice;
-    // The event is single-use, whichever way the user answered.
-    installPrompt = null;
-    renderInstallState();
-    if (outcome === 'dismissed') toast('설치를 취소했습니다');
+  $('install-button').addEventListener('click', promptInstall);
+  $('install-bar-button').addEventListener('click', promptInstall);
+
+  $('install-bar-dismiss').addEventListener('click', () => {
+    try {
+      localStorage.setItem(INSTALL_DISMISSED_KEY, '1');
+    } catch {
+      /* private mode — the banner just comes back next time */
+    }
+    $('install-bar').hidden = true;
   });
 }
 

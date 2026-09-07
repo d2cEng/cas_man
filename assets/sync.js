@@ -223,7 +223,13 @@ export async function sync({ interactive = false } = {}) {
       }
 
       saveSettings({ lastSyncAt: Date.now() });
-      return { pulled: changed, pushed: outgoing.length, total: records.length };
+      // Tombstones travel with everything else so deletions propagate, but they
+      // are not records the user has — count only the live ones.
+      return {
+        pulled: changed,
+        pushed: outgoing.length,
+        total: records.filter((r) => !r.deleted).length,
+      };
     } catch (error) {
       throw error instanceof SyncError ? error : describeFirestoreError(error);
     }
