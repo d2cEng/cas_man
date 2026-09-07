@@ -102,12 +102,26 @@ test('merge keeps the newer copy of a record', () => {
   assert.equal(changed, 1);
 });
 
-test('merge does not resurrect a record deleted elsewhere', () => {
+test('다른 기기에서 지운 기록은 병합 결과에서 사라진다', () => {
   const mine = [normalise({ ...base, updatedAt: 100 })];
+  // 예전 버전이 남긴 삭제 표식은 "지워졌다"는 뜻이지 보관할 행이 아니다.
   const theirs = [normalise({ ...base, deleted: true, updatedAt: 200 })];
 
-  const { records } = mergeRecords(mine, theirs);
-  assert.equal(records[0].deleted, true);
+  const { records, changed } = mergeRecords(mine, theirs);
+  assert.equal(records.length, 0);
+  assert.equal(changed, 1);
+});
+
+test('여기서 지운 기록은 클라우드에 남아 있어도 되살아나지 않는다', () => {
+  const mine = [];
+  // 지웠지만 아직 클라우드에서 못 지운 상태
+  const theirs = [normalise({ ...base, id: 'gone', updatedAt: 200 })];
+
+  const { records } = mergeRecords(mine, theirs, ['gone']);
+  assert.equal(records.length, 0);
+
+  // 대기열에 없으면 평범한 새 기록으로 받아온다.
+  assert.equal(mergeRecords(mine, theirs).records.length, 1);
 });
 
 test('merge keeps a local edit that is newer than the remote copy', () => {
@@ -119,21 +133,15 @@ test('merge keeps a local edit that is newer than the remote copy', () => {
   assert.equal(changed, 0);
 });
 
-test('동기화 건수는 삭제 표식을 빼고 센다', () => {
-  // 병합 결과에는 삭제 표식이 남아 전파되지만, 사용자가 가진 기록 수는 아니다.
+test('병합 결과에는 살아 있는 기록만 남는다', () => {
   const merged = mergeRecords(
+    [normalise({ ...base, id: 'a' }), normalise({ ...base, id: 'b' })],
     [
-      normalise({ ...base, id: 'a' }),
-      normalise({ ...base, id: 'b' }),
-      normalise({ ...base, id: 'c', deleted: true }),
-    ],
-    [
-      normalise({ ...base, id: 'd', deleted: true }),
-      normalise({ ...base, id: 'e', deleted: true }),
+      normalise({ ...base, id: 'c' }),
+      normalise({ ...base, id: 'a', deleted: true, updatedAt: Date.now() + 1000 }),
     ],
   );
-  assert.equal(merged.records.length, 5);
-  assert.equal(merged.records.filter((r) => !r.deleted).length, 2);
+  assert.deepEqual(merged.records.map((r) => r.id).sort(), ['b', 'c']);
 });
 
 test('merge is idempotent, so repeated syncs converge', () => {
