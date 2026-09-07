@@ -5,6 +5,7 @@ import {
   DEFAULT_ACCOUNTS,
   DEFAULT_CATEGORIES,
   TYPES,
+  get,
   groupOf,
   list,
   loadSettings,
@@ -577,6 +578,47 @@ function renderDefaultAccount() {
   fillAccountSelect($('setting-transfer-to'), state.settings.transferTo, '선택 안 함');
 }
 
+/**
+ * The 잔고신고 row: how much cash was in the wallet when this ledger started.
+ *
+ * It is an ordinary record dated before everything else, written the way the
+ * workbook already declares balances (거래처 잔고신고 · 범주 수입 · 비고 잔고), so
+ * the running 잔액 lines up with the cash actually in hand — and the ledger
+ * session recognises it without being told.
+ */
+const OPENING = { payee: '잔고신고', memo: '잔고', account: '현금' };
+
+function toDateInput(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** The day before the earliest record, so the opening balance sorts first. */
+function defaultOpeningDate() {
+  const others = state.records.filter((r) => r.id !== state.settings.openingId);
+  if (!others.length) return toDateInput(Date.now());
+  const earliest = Math.min(...others.map((r) => r.ts));
+  return toDateInput(earliest - 86400000);
+}
+
+async function renderOpening() {
+  const amount = $('opening-amount');
+  const date = $('opening-date');
+  const status = $('opening-status');
+
+  const existing = state.settings.openingId ? await get(state.settings.openingId) : null;
+
+  if (existing && !existing.deleted) {
+    amount.value = existing.amount;
+    date.value = toDateInput(existing.ts);
+    status.textContent = `${toDateInput(existing.ts)} 기준 ${money(existing.amount)} 로 기록되어 있습니다.`;
+  } else {
+    amount.value = '';
+    date.value = defaultOpeningDate();
+    status.textContent = '아직 설정하지 않았습니다. 비워두면 0에서 시작합니다.';
+  }
+}
+
 function renderSyncState() {
   const dot = $('sync-dot');
   const label = $('sync-label');
@@ -744,6 +786,7 @@ function showView(name) {
   if (name === 'history') renderHistory();
   if (name === 'settings') {
     renderInstallState();
+    renderOpening();
     renderCategoryEditor();
     renderAccountEditor();
     renderDefaultAccount();
@@ -962,6 +1005,36 @@ function wire() {
     renderWidgetUrl();
   });
 
+  $('opening-save').addEventListener('click', async () => {
+    const amount = Math.round(Math.abs(Number($('opening-amount').value) || 0));
+    if (amount <= 0) {
+      toast('금액을 입력하세요', 'warn');
+      return;
+    }
+    const ts = fromLocalInput(`${$('opening-date').value}T00:00`);
+    const saved = await put({
+      ...OPENING,
+      id: state.settings.openingId || newId(),
+      ts,
+      amount,
+      type: 'income',
+      source: state.settings.source,
+    });
+    state.settings = saveSettings({ openingId: saved.id });
+    await renderOpening();
+    toast(`기초 잔액을 ${money(amount)} 로 설정했습니다`, 'ok');
+    backgroundSync();
+  });
+
+  $('opening-clear').addEventListener('click', async () => {
+    if (!state.settings.openingId) return;
+    await remove(state.settings.openingId);
+    state.settings = saveSettings({ openingId: '' });
+    await renderOpening();
+    toast('기초 잔액을 삭제했습니다');
+    backgroundSync();
+  });
+
   $('add-account').addEventListener('click', () => {
     const name = $('new-account').value.trim();
     if (!name || state.settings.accounts.includes(name)) return;
@@ -1033,7 +1106,10 @@ function wire() {
 async function refresh() {
   state.records = await list();
   if (!$('view-history').hidden) renderHistory();
-  if (!$('view-settings').hidden) renderStats();
+  if (!$('view-settings').hidden) {
+    renderStats();
+    renderOpening();
+  }
 }
 
 async function main() {
