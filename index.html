@@ -147,19 +147,28 @@
 
       <!-- ── 설정 ─────────────────────────────────────────────── -->
       <section class="view" id="view-settings" data-view="settings" hidden>
+        <h2 class="section">계정</h2>
+
         <details class="card" open>
           <summary class="card__title">클라우드 동기화</summary>
           <p class="card__note">
-            구글 계정으로 로그인하면 기록이 본인 Firestore 영역
-            <code>users/{uid}/cashman</code> 에 저장되어 기기 간에 동기화됩니다. 본인 계정 아래에만
-            저장되며, 다른 사람은 읽을 수 없습니다.
+            구글 계정으로 로그인하면 기록이 본인 Firestore 영역에만 저장되어 폰·PC 어디서 열어도
+            같은 장부를 봅니다. 입력은 기기에 먼저 저장되므로, 로그인하지 않아도 앱은 그대로
+            동작합니다.
           </p>
-          <div class="row">
-            <button class="btn" id="sync-connect" type="button">구글 로그인</button>
-            <button class="btn btn--ghost" id="sync-now" type="button">지금 동기화</button>
+
+          <div class="statusline">
+            <span class="statusline__dot" id="sync-dot2"></span>
+            <span id="sync-status">로그인되지 않음</span>
+          </div>
+
+          <div class="row" id="sync-actions-out">
+            <button class="btn btn--primary" id="sync-connect" type="button">구글 로그인</button>
+          </div>
+          <div class="row" id="sync-actions-in" hidden>
+            <button class="btn" id="sync-now" type="button">지금 동기화</button>
             <button class="btn btn--ghost" id="sync-disconnect" type="button">로그아웃</button>
           </div>
-          <p class="card__note" id="sync-status">로그인되지 않음</p>
 
           <div id="rules-help" hidden>
             <p class="card__note card__note--warn">
@@ -176,87 +185,14 @@
           </div>
         </details>
 
-        <details class="card" id="install-card">
-          <summary class="card__title">홈 화면에 설치</summary>
-          <p class="card__note" id="install-note">
-            설치하면 주소창 없이 앱처럼 열리고, 오프라인에서도 입력할 수 있습니다.
-          </p>
-          <div class="row">
-            <button class="btn btn--primary" id="install-button" type="button" hidden>
-              앱 설치
-            </button>
-          </div>
-        </details>
-
-        <details class="card">
-          <summary class="card__title">내보내기 / 가져오기</summary>
-          <div class="row">
-            <button class="btn" id="export-csv" type="button">거래내역 CSV</button>
-            <button class="btn" id="copy-handoff" type="button">인수인계 요약 복사</button>
-          </div>
-          <div class="row">
-            <button class="btn btn--ghost" id="export-json" type="button">JSON 백업</button>
-            <label class="btn btn--ghost" for="import-file">파일 가져오기</label>
-            <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
-          </div>
-          <p class="card__note">
-            <strong>거래내역 CSV</strong> — <em>일본 자산 관리</em> 워크북 「거래내역」 시트와 열이
-            동일한(<code>날짜·계좌·금액·거래처·범주·출처·비고</code>) 소스 파일입니다. 날짜
-            오름차순, 금액은 지출·이체 음수 / 수입 양수. 파일명에 기간·건수가 들어가므로
-            <code>archive/</code> 에 그대로 누적하고 <code>_MANIFEST.csv</code> 에 md5를 등록하면
-            됩니다.
-          </p>
-          <p class="card__note">
-            <strong>인수인계 요약</strong> — 건수·합계·기간을 마크다운으로 복사합니다. 코워크
-            세션에 붙여넣으면 규칙 5(독립 검산)의 대조값으로 쓸 수 있습니다.
-          </p>
-          <p class="card__note">
-            <strong>JSON 백업</strong> — 삭제 표식·id까지 포함한 무손실 백업(기기 이전용).
-          </p>
-        </details>
-
-        <details class="card">
-          <summary class="card__title">표시 통화</summary>
-          <p class="card__note">
-            금액은 정수로 저장되고, 통화는 표시에만 쓰입니다. 언제든 바꿔도 기록은 그대로입니다.
-          </p>
-          <select class="field" id="setting-currency">
-            <option value="JPY">円 (일본 엔)</option>
-            <option value="KRW">원 (대한민국 원)</option>
-            <option value="USD">$ (미국 달러)</option>
-          </select>
-        </details>
-
-        <details class="card">
-          <summary class="card__title">범주 관리</summary>
-          <div class="chips chips--editable" id="category-editor"></div>
-          <div class="row">
-            <input class="field" id="new-category" type="text" placeholder="새 범주" autocomplete="off" />
-            <button class="btn" id="add-category" type="button">추가</button>
-          </div>
-        </details>
-
-        <details class="card">
-          <summary class="card__title">계좌 관리</summary>
-          <label class="label" for="setting-default-account">기본 계좌 (지출·수입)</label>
-          <select class="field" id="setting-default-account"></select>
-          <label class="label" for="setting-transfer-from">이체 기본 — 보내는 계좌</label>
-          <select class="field" id="setting-transfer-from"></select>
-          <label class="label" for="setting-transfer-to">이체 기본 — 받는 계좌</label>
-          <select class="field" id="setting-transfer-to"></select>
-          <div class="chips chips--editable" id="account-editor"></div>
-          <div class="row">
-            <input class="field" id="new-account" type="text" placeholder="새 계좌" autocomplete="off" />
-            <button class="btn" id="add-account" type="button">추가</button>
-          </div>
-        </details>
+        <h2 class="section">장부 설정</h2>
 
         <details class="card">
           <summary class="card__title">현금 기초 잔액</summary>
           <p class="card__note">
-            이 앱을 쓰기 시작한 시점에 지갑에 있던 현금입니다. 워크북과 같은 방식으로
-            <code>거래처 잔고신고 · 범주 수입 · 비고 잔고</code> 인 기록 한 건으로 남습니다. 이걸
-            넣어두면 내역의 현금 잔액과 CSV의 <code>잔액</code> 열이 실제 지갑과 바로 맞습니다.
+            이 앱을 쓰기 시작한 시점에 지갑에 있던 현금입니다. 넣어두면 잔액이 실제 지갑과 바로
+            맞아떨어져, 차이가 곧 빠뜨린 지출이 됩니다. 워크북과 같은 방식으로
+            <code>거래처 잔고신고 · 범주 수입 · 비고 잔고</code> 인 기록 한 건으로 남습니다.
           </p>
           <div class="row">
             <input
@@ -278,10 +214,99 @@
         </details>
 
         <details class="card">
-          <summary class="card__title">위젯 · 단축어 연동</summary>
+          <summary class="card__title">계좌</summary>
+          <p class="card__note">
+            지출·수입은 기본 계좌로, 이체는 아래 짝으로 시작합니다. 이체는 <strong>은행에서 현금
+            뽑기</strong>가 가장 잦아 그렇게 맞춰 두었습니다.
+          </p>
+          <label class="label" for="setting-default-account">기본 계좌 (지출·수입)</label>
+          <select class="field" id="setting-default-account"></select>
+          <label class="label" for="setting-transfer-from">이체 기본 — 보내는 계좌</label>
+          <select class="field" id="setting-transfer-from"></select>
+          <label class="label" for="setting-transfer-to">이체 기본 — 받는 계좌</label>
+          <select class="field" id="setting-transfer-to"></select>
+
+          <label class="label">계좌 목록</label>
+          <div class="chips chips--editable" id="account-editor"></div>
+          <div class="row">
+            <input class="field" id="new-account" type="text" placeholder="새 계좌" autocomplete="off" />
+            <button class="btn" id="add-account" type="button">추가</button>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">범주</summary>
+          <p class="card__note">
+            지출에만 쓰입니다. 수입과 이체는 워크북과 같이 범주가 하나로 고정됩니다. 초기 목록은
+            워크북에서 실제로 쓰는 값이고, 자주 쓰는 순서로 정렬해 두었습니다.
+          </p>
+          <div class="chips chips--editable" id="category-editor"></div>
+          <div class="row">
+            <input class="field" id="new-category" type="text" placeholder="새 범주" autocomplete="off" />
+            <button class="btn" id="add-category" type="button">추가</button>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">표시 통화</summary>
+          <p class="card__note">
+            표시에만 쓰입니다. 금액은 정수로 저장되므로 바꿔도 기록은 변하지 않고, 키패드의 0 묶음
+            키만 <code>00</code>/<code>000</code> 으로 따라 바뀝니다.
+          </p>
+          <select class="field" id="setting-currency">
+            <option value="JPY">円 (일본 엔)</option>
+            <option value="KRW">원 (대한민국 원)</option>
+            <option value="USD">$ (미국 달러)</option>
+          </select>
+        </details>
+
+        <h2 class="section">종합가계부로 넘기기</h2>
+
+        <details class="card">
+          <summary class="card__title">내보내기 / 가져오기</summary>
+          <p class="card__note">
+            <strong>거래내역 CSV</strong> — A~G열이 워크북 「거래내역」 시트와 같은 순서라 그대로
+            붙습니다. H열 <code>잔액</code> 은 계좌별 누계로, 지갑과 대조하라고 붙인 파생값입니다.
+            파일명에 기간·건수가 들어가 <code>archive/</code> 에 그냥 쌓아도 됩니다.
+          </p>
+          <div class="row">
+            <button class="btn btn--primary" id="export-csv" type="button">거래내역 CSV</button>
+            <button class="btn" id="copy-handoff" type="button">인수인계 요약 복사</button>
+          </div>
+          <p class="card__note">
+            <strong>인수인계 요약</strong> — 건수·합계·최종 잔액을 마크다운으로 복사합니다. 코워크
+            세션에 붙여넣어 독립 검산의 대조값으로 쓰세요.
+          </p>
+          <div class="row">
+            <button class="btn btn--ghost" id="export-json" type="button">JSON 백업</button>
+            <label class="btn btn--ghost" for="import-file">파일 가져오기</label>
+            <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
+          </div>
+          <p class="card__note">
+            <strong>JSON 백업</strong> 은 삭제 표식까지 담은 무손실 사본입니다(기기 이전용).
+            가져오기는 두 형식을 다 받고, 같은 파일을 두 번 넣어도 중복되지 않습니다.
+          </p>
+        </details>
+
+        <h2 class="section">앱</h2>
+
+        <details class="card" id="install-card">
+          <summary class="card__title">홈 화면에 설치</summary>
+          <p class="card__note" id="install-note">
+            설치하면 주소창 없이 앱처럼 열리고, 오프라인에서도 입력할 수 있습니다.
+          </p>
+          <div class="row">
+            <button class="btn btn--primary" id="install-button" type="button" hidden>
+              앱 설치
+            </button>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">위젯 · 단축어</summary>
           <p class="card__note">
             아래 주소를 iOS 단축어나 안드로이드 위젯의 “URL 열기”에 넣으면 앱을 여는 즉시 한 건이
-            기록됩니다.
+            기록됩니다. 버스비처럼 금액이 고정된 지출에 쓰면 한 번 탭으로 끝납니다.
           </p>
           <div class="row">
             <input class="field" id="widget-amount" type="number" inputmode="numeric" placeholder="금액" />
@@ -295,9 +320,15 @@
           </div>
         </details>
 
+        <h2 class="section">데이터</h2>
+
         <details class="card">
-          <summary class="card__title">데이터</summary>
+          <summary class="card__title">저장된 기록</summary>
           <p class="card__note" id="stats-line"></p>
+          <p class="card__note">
+            삭제한 기록도 표식만 남습니다. 다른 기기에 “이건 지워졌다”를 알려야 되살아나지 않기
+            때문이며, 이 표식은 내보내기에 포함되지 않습니다.
+          </p>
           <div class="row">
             <button class="btn btn--danger" id="wipe" type="button">모든 기록 삭제</button>
           </div>

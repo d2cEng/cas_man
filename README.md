@@ -209,6 +209,31 @@ https://내주소/?add=1&type=expense&amount=480&category=교통&account=현금&
 삭제 표식과 id까지 담은 무손실 백업입니다. 가계부로 넘길 때 쓰는 파일이 아니라, 폰을 바꾸거나
 브라우저 데이터를 지우기 전에 받아두는 용도입니다.
 
+### 코워크가 직접 읽기
+
+폰에서 내보내는 대신, 코워크 세션이 Firestore 에서 바로 같은 CSV 를 만들 수 있습니다.
+
+```sh
+pip install google-cloud-firestore
+python3 tools/fetch_firestore.py --key ~/keys/cas-man-reader.json --out archive/
+```
+
+**서비스 계정 만들기 (최초 1회)**
+
+1. [GCP 콘솔 → IAM 및 관리자 → 서비스 계정](https://console.cloud.google.com/iam-admin/serviceaccounts?project=cas-man-ca57a)
+   에서 계정을 만듭니다 (예: `cas-man-reader`).
+2. 역할은 **`Cloud Datastore 뷰어`(roles/datastore.viewer)** 만 줍니다 — 읽기 전용입니다.
+3. 키 → 새 키 만들기 → **JSON** 을 받아 맥에 둡니다.
+
+> 키는 자격증명입니다. **git 에도 `archive/` 에도 넣지 마세요.** 잃어버리면 콘솔에서 그 키만
+> 폐기하면 됩니다.
+
+출력은 앱의 내보내기와 **바이트 단위로 같습니다** — 열·정렬·잔액·파일명·BOM까지. 그래서 어느
+쪽으로 만들었든 `_MANIFEST.csv` 의 md5 중복 판별이 그대로 성립합니다. 이 동일성은
+`tests/csv_parity.py` 가 CI에서 지킵니다.
+
+실행하면 md5와 계좌별 최종 잔액을 함께 찍어주므로 규칙 5 검산에 바로 씁니다.
+
 ### 가져오기
 
 CSV와 JSON 둘 다 받습니다. **CSV에 id 열이 없어도 중복이 생기지 않습니다** — 행 내용
@@ -246,7 +271,8 @@ assets/transfer.js      CSV/JSON 내보내기·가져오기
 sw.js                   오프라인 캐시
 manifest.webmanifest    PWA 설치·바로가기·공유 대상
 tools/make_icons.py     아이콘 생성 (표준 라이브러리만 사용)
-tests/                  병합 규칙과 거래내역 CSV 왕복 테스트
+tools/fetch_firestore.py  Firestore → 거래내역 CSV (코워크용)
+tests/                  병합 규칙·CSV 왕복, 앱↔스크립트 출력 동일성
 ```
 
 의존성이 없으므로 `npm install` 은 필요 없습니다.

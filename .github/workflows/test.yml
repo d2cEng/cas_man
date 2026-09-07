@@ -18,6 +18,10 @@ jobs:
       # No dependencies to install — the app and its tests are plain ES modules.
       - run: node --test tests/*.test.mjs
 
+      # The app and tools/fetch_firestore.py both write files into archive/,
+      # deduped by md5, so their output must not drift apart.
+      - run: python3 tests/csv_parity.py
+
       - name: Icons are up to date with tools/make_icons.py
         run: |
           python3 tools/make_icons.py

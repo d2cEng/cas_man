@@ -623,19 +623,28 @@ function renderSyncState() {
   const dot = $('sync-dot');
   const label = $('sync-label');
   const status = $('sync-status');
+  const cardDot = $('sync-dot2');
 
-  if (isConnected()) {
+  const connected = isConnected();
+  // Only ever offer the action that applies: signing in when signed out, and
+  // syncing or signing out once signed in.
+  $('sync-actions-out').hidden = connected;
+  $('sync-actions-in').hidden = !connected;
+
+  if (connected) {
     dot.dataset.state = 'on';
+    cardDot.dataset.state = 'on';
     label.textContent = '동기화';
     const last = state.settings.lastSyncAt;
     status.textContent = last
       ? `${accountLabel()} · 마지막 동기화 ${formatDate(last)} ${formatTime(last)}`
-      : `${accountLabel()} 로그인됨`;
+      : `${accountLabel()} 로 로그인됨`;
     return;
   }
   dot.dataset.state = 'idle';
+  cardDot.dataset.state = 'idle';
   label.textContent = '로그인';
-  status.textContent = '구글 로그인을 하면 기기 간에 기록이 동기화됩니다.';
+  status.textContent = '로그인되지 않음 — 기록은 이 기기에만 있습니다.';
 }
 
 function renderWidgetUrl() {

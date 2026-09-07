@@ -7,3 +7,8 @@ node_modules/
 *.json
 !package.json
 !manifest.webmanifest
+
+# Firebase service account keys — credentials, never commit.
+*service-account*.json
+*-reader.json
+keys/
