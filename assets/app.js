@@ -5,6 +5,7 @@ import {
   DEFAULT_ACCOUNTS,
   DEFAULT_CATEGORIES,
   TYPES,
+  groupOf,
   list,
   loadSettings,
   newId,
@@ -12,6 +13,7 @@ import {
   remove,
   saveSettings,
   allRaw,
+  newId as newGroupId,
   putMany,
   onChange,
   wipe,
@@ -56,7 +58,9 @@ const state = {
   amount: 0,
   category: '',
   account: '',
+  counterAccount: '',
   editingId: null,
+  editingGroup: null,
   month: startOfMonth(new Date()),
   query: '',
   records: [],
@@ -122,21 +126,44 @@ function renderTypeToggle() {
   document.body.dataset.type = state.type;
   // 수입 and 이체 are single 범주 in the workbook, so there is nothing to pick.
   $('category-chips').hidden = Boolean(TYPES[state.type].category);
+
+  // 이체 needs the account on the other side, and may carry an ATM fee.
+  const isTransfer = state.type === 'transfer';
+  $('field-counter-account').hidden = !isTransfer;
+  $('field-fee').hidden = !isTransfer;
+  $('field-account').setAttribute('aria-label', isTransfer ? '보내는 계좌' : '계좌');
+
   renderAmount();
 }
 
-function renderAccounts() {
-  const select = $('field-account');
-  const chosen = state.account || state.settings.defaultAccount;
+function fillAccountSelect(select, chosen, placeholder) {
   select.textContent = '';
+  if (placeholder) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = placeholder;
+    select.appendChild(option);
+  }
   for (const name of state.settings.accounts) {
     const option = document.createElement('option');
     option.value = name;
     option.textContent = name;
     select.appendChild(option);
   }
-  select.value = state.settings.accounts.includes(chosen) ? chosen : state.settings.accounts[0];
-  state.account = select.value;
+  select.value = state.settings.accounts.includes(chosen) ? chosen : placeholder ? '' : state.settings.accounts[0];
+  return select.value;
+}
+
+function renderAccounts() {
+  state.account = fillAccountSelect(
+    $('field-account'),
+    state.account || state.settings.defaultAccount,
+  );
+  state.counterAccount = fillAccountSelect(
+    $('field-counter-account'),
+    state.counterAccount,
+    '받는 계좌 선택',
+  );
 }
 
 function renderCategories() {
@@ -162,7 +189,10 @@ function renderCategories() {
 function resetEntry() {
   state.amount = 0;
   state.editingId = null;
+  state.editingGroup = null;
   state.account = state.settings.defaultAccount;
+  state.counterAccount = '';
+  $('field-fee').value = '';
   renderAccounts();
   $('field-payee').value = '';
   $('field-memo').value = '';
@@ -185,29 +215,103 @@ function pressKey(key) {
 
 async function saveEntry() {
   if (state.amount <= 0) return;
-  const record = {
-    id: state.editingId || newId(),
+
+  const common = {
     ts: fromLocalInput($('field-date').value),
-    account: $('field-account').value,
     amount: state.amount,
     type: state.type,
-    category: TYPES[state.type].category || state.category,
     payee: $('field-payee').value,
     memo: $('field-memo').value,
     source: state.settings.source,
   };
-  await put(record);
-  toast(state.editingId ? '수정했습니다' : `${money(record.amount)} 기록`, 'ok');
+
+  if (state.type === 'transfer') {
+    await saveTransfer(common);
+    return;
+  }
+
+  await put({
+    ...common,
+    id: state.editingId || newId(),
+    account: $('field-account').value,
+    category: TYPES[state.type].category || state.category,
+  });
+  toast(state.editingId ? '수정했습니다' : `${money(common.amount)} 기록`, 'ok');
   resetEntry();
   backgroundSync();
 }
 
-function editRecord(record) {
+/**
+ * A 이체 becomes the same pair of rows the 거래내역 sheet uses — money out of one
+ * 계좌 and into another — so account balances stay reconcilable. An ATM fee is
+ * real spending, so it goes in as its own 지출 row rather than inflating the
+ * transfer, which is excluded from 지출 totals.
+ */
+async function saveTransfer(common) {
+  const from = $('field-account').value;
+  const to = $('field-counter-account').value;
+
+  if (!to) {
+    toast('받는 계좌를 선택하세요', 'warn');
+    return;
+  }
+  if (to === from) {
+    toast('보내는 계좌와 받는 계좌가 같습니다', 'warn');
+    return;
+  }
+
+  const existing = state.editingGroup || [];
+  const group = existing[0]?.group || newGroupId();
+  const idFor = (direction) =>
+    existing.find((r) => r.direction === direction)?.id || newId();
+
+  await putMany([
+    { ...common, id: idFor('out'), account: from, category: '이체', group, direction: 'out' },
+    { ...common, id: idFor('in'), account: to, category: '이체', group, direction: 'in' },
+  ]);
+
+  const fee = Math.round(Math.abs(Number($('field-fee').value) || 0));
+  if (fee > 0) {
+    await put({
+      ts: common.ts,
+      // The fee is charged on the account the money left.
+      account: from,
+      amount: fee,
+      type: 'expense',
+      category: state.settings.feeCategory,
+      payee: common.payee || 'ATM',
+      memo: [common.memo, '수수료'].filter(Boolean).join(' '),
+      source: state.settings.source,
+    });
+  }
+
+  const note = fee > 0 ? ` (수수료 ${money(fee)} 별도 기록)` : '';
+  toast(
+    state.editingGroup ? `이체를 수정했습니다${note}` : `${from} → ${to} ${money(common.amount)}${note}`,
+    'ok',
+  );
+  resetEntry();
+  backgroundSync();
+}
+
+async function editRecord(record) {
   state.editingId = record.id;
+  state.editingGroup = null;
   state.type = record.type;
   state.amount = record.amount;
   state.category = record.category;
   state.account = record.account;
+  state.counterAccount = '';
+  $('field-fee').value = '';
+
+  if (record.type === 'transfer' && record.group) {
+    // Edit the pair as one movement, whichever half was tapped.
+    const pair = await groupOf(record.id);
+    state.editingGroup = pair;
+    state.account = pair.find((r) => r.direction === 'out')?.account || record.account;
+    state.counterAccount = pair.find((r) => r.direction === 'in')?.account || '';
+  }
+
   renderAccounts();
   $('field-payee').value = record.payee;
   $('field-memo').value = record.memo;
@@ -232,11 +336,25 @@ function monthRecords() {
   });
 }
 
+/** The 계좌 on the other side of a 이체, for display. */
+function counterpartOf(record) {
+  if (!record.group) return '';
+  return state.records.find((r) => r.group === record.group && r.id !== record.id)?.account || '';
+}
+
+/**
+ * One line per movement: a 이체 is two rows in the ledger but a single thing
+ * that happened, so only its outgoing half is listed.
+ */
+function visibleRows(records) {
+  return records.filter((r) => !(r.type === 'transfer' && r.group && r.direction === 'in'));
+}
+
 function renderHistory() {
   const d = new Date(state.month);
   $('month-label').textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
 
-  const records = monthRecords();
+  const records = visibleRows(monthRecords());
   // 이체 moves money between accounts, so it is not spending.
   const expense = records.filter((r) => r.type === 'expense').reduce((sum, r) => sum + r.amount, 0);
   const income = records.filter((r) => r.type === 'income').reduce((sum, r) => sum + r.amount, 0);
@@ -282,7 +400,9 @@ function renderRow(record) {
   main.addEventListener('click', () => editRecord(record));
 
   const title = record.payee || record.category;
-  const sub = [record.account, record.payee ? record.category : '', record.memo]
+  const counterpart = counterpartOf(record);
+  const where = counterpart ? `${record.account} → ${counterpart}` : record.account;
+  const sub = [where, record.payee ? record.category : '', record.memo]
     .filter(Boolean)
     .join(' · ');
   main.innerHTML = `

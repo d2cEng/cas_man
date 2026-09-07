@@ -6,7 +6,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-const { mergeRecords, normalise, signedAmount, typeFromRow } = await import('../assets/store.js');
+const { mergeRecords, normalise, signedAmount, typeFromRow, directionFromRow } = await import(
+  '../assets/store.js'
+);
 const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate } = await import(
   '../assets/transfer.js'
 );
@@ -40,6 +42,47 @@ test('signed 금액 matches the 거래내역 convention', () => {
   assert.equal(signedAmount(normalise({ ...base, type: 'expense' })), -12000);
   assert.equal(signedAmount(normalise({ ...base, type: 'income' })), 12000);
   assert.equal(signedAmount(normalise({ ...base, type: 'transfer' })), -12000);
+});
+
+test('이체 의 두 행은 반대 부호를 가져 서로 상쇄된다', () => {
+  const out = normalise({ ...base, id: 'o', type: 'transfer', direction: 'out', account: '라쿠텐은행', amount: 30000 });
+  const income = normalise({ ...base, id: 'i', type: 'transfer', direction: 'in', account: '현금', amount: 30000 });
+
+  assert.equal(signedAmount(out), -30000);
+  assert.equal(signedAmount(income), 30000);
+  // 계좌 오라클: 이체만으로는 순자산이 변하지 않는다.
+  assert.equal(signedAmount(out) + signedAmount(income), 0);
+});
+
+test('ATM 수수료는 이체가 아니라 지출로 남아 순자산을 줄인다', () => {
+  const rows = [
+    normalise({ ...base, id: 'o', type: 'transfer', direction: 'out', account: '라쿠텐은행', amount: 30000 }),
+    normalise({ ...base, id: 'i', type: 'transfer', direction: 'in', account: '현금', amount: 30000 }),
+    normalise({ ...base, id: 'f', type: 'expense', account: '라쿠텐은행', amount: 220, category: '기타', memo: '수수료' }),
+  ];
+  const net = rows.reduce((sum, r) => sum + signedAmount(r), 0);
+  assert.equal(net, -220);
+
+  // 지출 집계에는 수수료만 잡힌다 (규칙 4: 이체 제외).
+  const spend = rows.filter((r) => r.type === 'expense').reduce((sum, r) => sum + r.amount, 0);
+  assert.equal(spend, 220);
+});
+
+test('부호로 이체의 어느 쪽인지 되읽는다', () => {
+  assert.equal(directionFromRow(-30000), 'out');
+  assert.equal(directionFromRow(30000), 'in');
+});
+
+test('이체 CSV 왕복 후에도 양쪽 부호가 보존된다', () => {
+  const rows = [
+    normalise({ ...base, id: 'o', type: 'transfer', direction: 'out', account: '라쿠텐은행', amount: 30000, payee: 'ATM', memo: '' }),
+    normalise({ ...base, id: 'i', type: 'transfer', direction: 'in', account: '현금', amount: 30000, payee: 'ATM', memo: '' }),
+  ];
+  const parsed = parseImport(toCsv(rows), 'ledger.csv');
+  const net = parsed.reduce((sum, r) => sum + signedAmount(r), 0);
+  assert.equal(net, 0);
+  assert.equal(parsed.filter((r) => r.direction === 'out').length, 1);
+  assert.equal(parsed.filter((r) => r.direction === 'in').length, 1);
 });
 
 test('type is inferred from a signed 금액 and its 범주', () => {

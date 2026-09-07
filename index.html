@@ -42,6 +42,17 @@
 
           <div class="entry__fields">
             <select class="field" id="field-account" aria-label="계좌"></select>
+            <select class="field" id="field-counter-account" aria-label="상대 계좌" hidden></select>
+            <input
+              class="field"
+              id="field-fee"
+              type="number"
+              inputmode="numeric"
+              min="0"
+              placeholder="수수료 (예: ATM 220)"
+              autocomplete="off"
+              hidden
+            />
             <input
               class="field"
               id="field-payee"

@@ -1,5 +1,5 @@
 // Offline shell. Bump CACHE when any precached file changes.
-const CACHE = 'cas-man-v2';
+const CACHE = 'cas-man-v3';
 
 // Relative URLs so the app works from any path on any static host.
 const SHELL = [
@@ -38,30 +38,35 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  // Never touch Google's auth/Drive traffic, and never cache writes.
+  // Never touch Google's auth/Firestore traffic, and never cache writes.
   if (request.method !== 'GET') return;
   if (new URL(request.url).origin !== self.location.origin) return;
 
-  // Navigations carry the widget/share query string; serve the cached shell and
-  // let the app read the parameters itself.
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request).catch(() => caches.match('index.html', { ignoreSearch: true })),
-    );
-    return;
-  }
-
+  // Network first, cache only as the offline fallback.
+  //
+  // Cache-first froze installed copies on whatever shipped the day the cache
+  // name last changed — a deploy that fixed a bug simply never reached anyone
+  // who had opened the app before. Correct code matters more here than saving
+  // a few KB on a page this small, and offline still works through the
+  // fallback below.
   event.respondWith(
-    caches.match(request, { ignoreSearch: true }).then(
-      (cached) =>
-        cached ||
-        fetch(request).then((response) => {
-          if (response.ok && response.type === 'basic') {
-            const copy = response.clone();
-            caches.open(CACHE).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        }),
-    ),
+    fetch(request)
+      .then((response) => {
+        if (response.ok && response.type === 'basic') {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(async () => {
+        const cached = await caches.match(request, { ignoreSearch: true });
+        if (cached) return cached;
+        // Navigations carry the widget/share query string; any cached shell
+        // will do, since the app reads those parameters itself.
+        if (request.mode === 'navigate') {
+          return caches.match('index.html', { ignoreSearch: true });
+        }
+        return Response.error();
+      }),
   );
 });
