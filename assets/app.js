@@ -15,6 +15,7 @@ import {
   saveSettings,
   allRaw,
   newId as newGroupId,
+  pendingDeletes,
   putMany,
   signedAmount,
   onChange,
@@ -685,8 +686,10 @@ function renderWidgetUrl() {
 
 async function renderStats() {
   const all = await allRaw();
-  const live = all.filter((r) => !r.deleted).length;
-  $('stats-line').textContent = `기록 ${num.format(live)}건 (삭제 표시 ${all.length - live}건 포함 저장)`;
+  const pending = pendingDeletes().length;
+  $('stats-line').textContent =
+    `기록 ${num.format(all.length)}건` +
+    (pending ? ` · 삭제 ${num.format(pending)}건이 다음 동기화에서 클라우드에도 반영됩니다` : '');
 }
 
 // ── install (Add to Home screen) ──────────────────────────────────────────

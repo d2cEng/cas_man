@@ -9,7 +9,15 @@
 // The apiKey below is safe in a public repo — Firestore security rules, not
 // the key, control who can read and write.
 
-import { allRaw, mergeRecords, putMany, loadSettings, saveSettings } from './store.js';
+import {
+  allRaw,
+  clearPendingDeletes,
+  dropLocal,
+  mergeRecords,
+  pendingDeletes,
+  putMany,
+  saveSettings,
+} from './store.js';
 
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyDl0G4uIiVqotZK0l63DfSDkmHv4g2fKYs',
@@ -205,8 +213,19 @@ export async function sync({ interactive = false } = {}) {
       const snapshot = await recordsCollection().get();
       const remote = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
 
+      // Rows deleted on this device, plus any tombstone an older version left
+      // behind up there — both are meant to be gone, so clear them for good.
+      const queued = pendingDeletes();
+      const staleTombstones = remote.filter((r) => r.deleted).map((r) => r.id);
+      const doomed = [...new Set([...queued, ...staleTombstones])];
+
       const local = await allRaw();
-      const { records, changed } = mergeRecords(local, remote);
+      const { records, changed } = mergeRecords(local, remote, doomed);
+
+      // Rows the merge dropped — deleted on another device — go from this one
+      // too. putMany only writes, so without this they would linger locally.
+      const kept = new Set(records.map((r) => r.id));
+      await dropLocal(local.filter((r) => !kept.has(r.id)).map((r) => r.id));
       if (changed) await putMany(records);
 
       // Push anything the remote copy is missing or holds an older version of.
@@ -216,20 +235,26 @@ export async function sync({ interactive = false } = {}) {
       for (let i = 0; i < outgoing.length; i += BATCH_LIMIT) {
         const batch = window.firebase.firestore().batch();
         for (const record of outgoing.slice(i, i + BATCH_LIMIT)) {
-          const { id, ...fields } = record;
+          const { id, deleted, ...fields } = record;
           batch.set(recordsCollection().doc(id), fields);
         }
         await batch.commit();
       }
 
+      // Only drop the local queue once the cloud copies are actually gone.
+      const remoteIds = new Set(remote.map((r) => r.id));
+      const toDelete = doomed.filter((id) => remoteIds.has(id));
+      for (let i = 0; i < toDelete.length; i += BATCH_LIMIT) {
+        const batch = window.firebase.firestore().batch();
+        for (const id of toDelete.slice(i, i + BATCH_LIMIT)) {
+          batch.delete(recordsCollection().doc(id));
+        }
+        await batch.commit();
+      }
+      clearPendingDeletes(doomed);
+
       saveSettings({ lastSyncAt: Date.now() });
-      // Tombstones travel with everything else so deletions propagate, but they
-      // are not records the user has — count only the live ones.
-      return {
-        pulled: changed,
-        pushed: outgoing.length,
-        total: records.filter((r) => !r.deleted).length,
-      };
+      return { pulled: changed, pushed: outgoing.length, deleted: toDelete.length, total: records.length };
     } catch (error) {
       throw error instanceof SyncError ? error : describeFirestoreError(error);
     }
@@ -246,5 +271,3 @@ export async function connect() {
   if (!isConnected()) await signIn();
   return sync({ interactive: true });
 }
-
-export { loadSettings };

@@ -283,7 +283,7 @@
             <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
           </div>
           <p class="card__note">
-            <strong>JSON 백업</strong> 은 삭제 표식까지 담은 무손실 사본입니다(기기 이전용).
+            <strong>JSON 백업</strong> 은 id까지 담은 무손실 사본입니다(기기 이전용).
             가져오기는 두 형식을 다 받고, 같은 파일을 두 번 넣어도 중복되지 않습니다.
           </p>
         </details>
@@ -326,8 +326,8 @@
           <summary class="card__title">저장된 기록</summary>
           <p class="card__note" id="stats-line"></p>
           <p class="card__note">
-            삭제한 기록도 표식만 남습니다. 다른 기기에 “이건 지워졌다”를 알려야 되살아나지 않기
-            때문이며, 이 표식은 내보내기에 포함되지 않습니다.
+            삭제한 기록은 기기에서 바로 지워지고, 다음 동기화 때 클라우드에서도 지워집니다.
+            표식으로 남겨두지 않습니다.
           </p>
           <div class="row">
             <button class="btn btn--danger" id="wipe" type="button">모든 기록 삭제</button>
