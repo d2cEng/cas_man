@@ -24,11 +24,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # The app is plain static files — there is nothing to build.
-      # `enablement` turns Pages on for the repository on the first run, so the
-      # deploy does not need a manual visit to Settings → Pages first.
+      # Pages must already be enabled for the repository with "GitHub Actions"
+      # as the source: GITHUB_TOKEN cannot create the Pages site itself
+      # ("Resource not accessible by integration"), so `enablement` is no help.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .

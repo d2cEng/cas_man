@@ -46,8 +46,11 @@ python3 -m http.server 8080
 ## 배포
 
 `main` 브랜치에 푸시하면 `.github/workflows/pages.yml` 이 GitHub Pages로 배포합니다.
-워크플로가 첫 실행에서 Pages를 알아서 켜므로 따로 설정할 것은 없습니다. (조직 정책 때문에
-자동 활성화가 막혀 있다면 **Settings → Pages → Source** 를 *GitHub Actions* 로 바꿔주세요.)
+
+**처음 한 번은 저장소 설정이 필요합니다.** 저장소 **Settings → Pages → Source** 를
+*GitHub Actions* 로 바꿔주세요. 워크플로의 `GITHUB_TOKEN` 으로는 Pages 사이트를 새로 만들 수
+없어서(`Resource not accessible by integration`), 이 단계 전까지는 배포가 실패합니다. 한 번
+켜두면 이후 푸시부터는 자동으로 배포됩니다.
 
 다른 호스팅을 쓴다면 저장소 전체를 정적 파일로 업로드하기만 하면 됩니다. 경로가 모두 상대
 경로라 `https://example.com/` 든 `https://example.com/ledger/` 든 그대로 동작합니다.
