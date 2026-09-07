@@ -9,9 +9,8 @@ import test from 'node:test';
 const { mergeRecords, normalise, signedAmount, typeFromRow, directionFromRow } = await import(
   '../assets/store.js'
 );
-const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate } = await import(
-  '../assets/transfer.js'
-);
+const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances } =
+  await import('../assets/transfer.js');
 
 const base = {
   id: 'a',
@@ -158,9 +157,9 @@ test('merge unions records from both sides', () => {
   );
 });
 
-test('CSV header is the 거래내역 column order in A:G', () => {
+test('CSV header is the 거래내역 column order in A:G, 잔액 trailing in H', () => {
   const header = toCsv([]).replace(/^\ufeff/, '').split('\r\n')[0].split(',');
-  assert.deepEqual(header, [
+  assert.deepEqual(header.slice(0, 7), [
     '날짜',
     '계좌',
     '금액',
@@ -169,6 +168,46 @@ test('CSV header is the 거래내역 column order in A:G', () => {
     '출처',
     '비고',
   ]);
+  assert.equal(header[7], '잔액');
+  assert.equal(header.length, 8);
+});
+
+test('잔액 열은 계좌별 누계라 서로 섞이지 않는다', () => {
+  const rows = [
+    normalise({ ...base, id: 'a', ts: Date.parse('2026-09-01T10:00'), account: '라쿠텐은행', amount: 30000, type: 'transfer', direction: 'out' }),
+    normalise({ ...base, id: 'b', ts: Date.parse('2026-09-01T10:00'), account: '현금', amount: 30000, type: 'transfer', direction: 'in' }),
+    normalise({ ...base, id: 'c', ts: Date.parse('2026-09-03T12:00'), account: '현금', amount: 1735, type: 'expense', category: '식비' }),
+  ];
+  const balances = toCsv(rows)
+    .replace(/^\ufeff/, '')
+    .split('\r\n')
+    .slice(1, 4)
+    .map((line) => line.split(',').slice(-1)[0]);
+
+  // 라쿠텐은행 -30000 / 현금 +30000 / 현금 30000-1735
+  assert.deepEqual(balances, ['-30000', '30000', '28265']);
+});
+
+test('기록상 최종 잔액은 현금을 먼저 보여준다', () => {
+  const rows = [
+    normalise({ ...base, id: 'a', account: '라쿠텐은행', amount: 30000, type: 'transfer', direction: 'out' }),
+    normalise({ ...base, id: 'b', account: '현금', amount: 30000, type: 'transfer', direction: 'in' }),
+    normalise({ ...base, id: 'c', account: '현금', amount: 1735, type: 'expense', category: '식비' }),
+  ];
+  assert.deepEqual(closingBalances(rows), [
+    ['현금', 28265],
+    ['라쿠텐은행', -30000],
+  ]);
+});
+
+test('잔액 열이 있어도 가져오기는 그대로 동작한다', () => {
+  const rows = [normalise({ ...base, account: '현금', amount: 1735, type: 'expense', category: '식비' })];
+  const parsed = parseImport(toCsv(rows), 'ledger.csv');
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].amount, 1735);
+  assert.equal(parsed[0].account, '현금');
+  // 잔액은 파생값이라 되읽지 않는다.
+  assert.equal(parsed[0].잔액, undefined);
 });
 
 test('CSV writes 금액 signed, the way the workbook stores it', () => {
