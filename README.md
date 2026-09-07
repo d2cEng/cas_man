@@ -70,43 +70,44 @@ python3 -m http.server 8080
 
 ## 클라우드 동기화
 
-**설정할 것이 없습니다.** 설정 → 클라우드 동기화에서 **구글 로그인** 만 누르면 됩니다.
+설정 → 클라우드 동기화에서 **구글 로그인** 만 누르면 됩니다.
 
-일본어 퀴즈 앱과 같은 Firebase 프로젝트(`jaquiz-ce805`)·같은 SDK·같은 계정을 씁니다. 그래서
-승인된 도메인(`d2ceng.github.io`)도, 구글 로그인 설정도 이미 되어 있습니다.
+전용 Firebase 프로젝트 `cas-man-ca57a` 를 씁니다. 일본어 퀴즈 앱과 계정은 같지만 프로젝트는
+분리되어 있어, 한쪽의 OAuth 검증 상태나 보안 규칙이 다른 쪽에 영향을 주지 않습니다.
 
 기록은 본인 계정 아래에만 저장됩니다.
 
 ```
-users/{uid}/cashman/{recordId}      ← 현금장부
-users/{uid}/books/{bookId}          ← 퀴즈 앱 (별개, 서로 건드리지 않음)
+users/{uid}/cashman/{recordId}
 ```
 
 `apiKey` 가 저장소에 그대로 있는 것은 정상입니다. 접근 제어는 키가 아니라 **Firestore 보안
 규칙**이 합니다.
 
-### 보안 규칙 (최초 1회)
+### 프로젝트 설정 (최초 1회)
 
-퀴즈 앱 규칙이 `books` 만 허용하고 있으면 `cashman` 쓰기가 막힙니다. 그때 앱이 설정 화면에
-**붙여넣을 규칙과 콘솔 링크를 그대로 띄워줍니다.** 콘솔 → Firestore → 규칙에서
-`match /databases/{database}/documents` **안쪽에** 추가하고 게시하세요.
+새 프로젝트에 이 앱을 붙일 때 필요한 전부입니다.
+
+| 콘솔 위치 | 할 일 |
+|---|---|
+| 프로젝트 설정 → 내 앱 → `</>` | 웹 앱 등록 → 나온 `firebaseConfig` 를 `assets/sync.js` 에 반영 |
+| Authentication → 시작하기 | 로그인 제공업체 **Google** 사용 설정 |
+| Authentication → 설정 → 승인된 도메인 | `d2ceng.github.io` 추가 (없으면 `auth/unauthorized-domain`) |
+| Firestore Database → 만들기 | 위치 `asia-northeast1`(도쿄), 프로덕션 모드 |
+| Firestore → 규칙 | 아래 규칙 게시 |
 
 ```
-match /users/{uid}/cashman/{recordId} {
-  allow read, write: if request.auth != null && request.auth.uid == uid;
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/cashman/{recordId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
 }
 ```
 
-**기존 규칙은 그대로 두면 됩니다.** Firestore 규칙은 OR로 평가되므로, 새 경로용 허용을 더하는
-것은 기존 권한을 좁히거나 퀴즈 앱을 깨뜨릴 수 없습니다. 본인 `uid` 아래에만 열립니다.
-
-앞으로 앱을 더 붙일 생각이면 기존 `users` 블록을 아래로 넓혀두는 것도 방법입니다.
-
-```
-match /users/{uid}/{document=**} {
-  allow read, write: if request.auth != null && request.auth.uid == uid;
-}
-```
+규칙이 빠지면 앱이 설정 화면에 **붙여넣을 규칙과 콘솔 링크를 그대로 띄워줍니다.**
 
 ### 충돌 처리
 

@@ -1,10 +1,10 @@
-// Firebase sync — same project, sign-in and SDK as the WEB-JA-Quiz app, so no
-// new Google Cloud setup is needed to use this one.
+// Firebase sync against this app's own project (`cas-man-ca57a`), kept separate
+// from the WEB-JA-Quiz project so neither app's OAuth verification state can
+// affect the other.
 //
-// Records live at `users/{uid}/cashman/{recordId}`, one document each, beside
-// the quiz app's `users/{uid}/books/*`. Firestore is the transport only: the
-// device's IndexedDB stays the source of truth, and the same per-record
-// last-write-wins merge decides what survives.
+// Records live at `users/{uid}/cashman/{recordId}`, one document each.
+// Firestore is the transport only: the device's IndexedDB stays the source of
+// truth, and the same per-record last-write-wins merge decides what survives.
 //
 // The apiKey below is safe in a public repo — Firestore security rules, not
 // the key, control who can read and write.
@@ -12,12 +12,12 @@
 import { allRaw, mergeRecords, putMany, loadSettings, saveSettings } from './store.js';
 
 const FIREBASE_CONFIG = {
-  apiKey: 'AIzaSyCbJ729H4JHBT5x_IqRLwIga7IyHhb8CE8',
-  authDomain: 'jaquiz-ce805.firebaseapp.com',
-  projectId: 'jaquiz-ce805',
-  storageBucket: 'jaquiz-ce805.firebasestorage.app',
-  messagingSenderId: '342340578538',
-  appId: '1:342340578538:web:3b22f74fa9f626adec3b93',
+  apiKey: 'AIzaSyDl0G4uIiVqotZK0l63DfSDkmHv4g2fKYs',
+  authDomain: 'cas-man-ca57a.firebaseapp.com',
+  projectId: 'cas-man-ca57a',
+  storageBucket: 'cas-man-ca57a.firebasestorage.app',
+  messagingSenderId: '302219334005',
+  appId: '1:302219334005:web:f19e5ec7dd503431d3833c',
 };
 
 const SDK_VERSION = '10.14.1';
