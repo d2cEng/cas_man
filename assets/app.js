@@ -16,8 +16,25 @@ import {
   onChange,
   wipe,
 } from './store.js';
-import { connect, disconnect, isConfigured, isConnected, sync, SyncError } from './sync.js';
-import { download, formatDate, formatTime, parseImport, toCsv, toJson } from './transfer.js';
+import {
+  accountLabel,
+  connect,
+  disconnect,
+  isConnected,
+  restore,
+  sync,
+  SyncError,
+} from './sync.js';
+import {
+  csvFilename,
+  download,
+  formatDate,
+  formatTime,
+  handoffSummary,
+  parseImport,
+  toCsv,
+  toJson,
+} from './transfer.js';
 
 const $ = (id) => document.getElementById(id);
 const num = new Intl.NumberFormat('ko-KR');
@@ -373,24 +390,18 @@ function renderSyncState() {
   const label = $('sync-label');
   const status = $('sync-status');
 
-  if (!isConfigured()) {
-    dot.dataset.state = 'off';
-    label.textContent = '로컬';
-    status.textContent = '클라이언트 ID를 입력하면 동기화를 켤 수 있습니다.';
-    return;
-  }
   if (isConnected()) {
     dot.dataset.state = 'on';
     label.textContent = '동기화';
     const last = state.settings.lastSyncAt;
     status.textContent = last
-      ? `연결됨 · 마지막 동기화 ${formatDate(last)} ${formatTime(last)}`
-      : '연결됨';
+      ? `${accountLabel()} · 마지막 동기화 ${formatDate(last)} ${formatTime(last)}`
+      : `${accountLabel()} 로그인됨`;
     return;
   }
   dot.dataset.state = 'idle';
-  label.textContent = '연결 필요';
-  status.textContent = '연결 버튼을 눌러 구글 계정을 인증하세요.';
+  label.textContent = '로그인';
+  status.textContent = '구글 로그인을 하면 기기 간에 기록이 동기화됩니다.';
 }
 
 function renderWidgetUrl() {
@@ -435,6 +446,67 @@ async function renderStats() {
   $('stats-line').textContent = `기록 ${num.format(live)}건 (삭제 표시 ${all.length - live}건 포함 저장)`;
 }
 
+// ── install (Add to Home screen) ──────────────────────────────────────────
+
+// Chrome fires this instead of showing its own prompt once we preventDefault,
+// which lets us offer the install from inside the app where it is findable.
+let installPrompt = null;
+
+function isStandalone() {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function renderInstallState() {
+  const button = $('install-button');
+  const note = $('install-note');
+
+  if (isStandalone()) {
+    button.hidden = true;
+    note.textContent = '이미 설치되어 있습니다.';
+    return;
+  }
+  if (installPrompt) {
+    button.hidden = false;
+    note.textContent =
+      '설치하면 주소창 없이 앱처럼 열리고, 오프라인에서도 입력할 수 있습니다. 아이콘을 길게 누르면 빠른입력 바로가기도 나옵니다.';
+    return;
+  }
+
+  button.hidden = true;
+  // iOS has no install event; Safari only offers it from the share sheet.
+  const iOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  note.textContent = iOS
+    ? 'Safari에서 공유 버튼 → "홈 화면에 추가" 를 누르세요.'
+    : '브라우저 메뉴(⋮)에서 "앱 설치" 또는 "홈 화면에 추가" 를 누르세요. 크롬에서는 잠시 뒤 이 버튼이 나타납니다.';
+}
+
+function wireInstall() {
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    installPrompt = event;
+    renderInstallState();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    installPrompt = null;
+    renderInstallState();
+    toast('홈 화면에 설치했습니다', 'ok');
+  });
+
+  $('install-button').addEventListener('click', async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    // The event is single-use, whichever way the user answered.
+    installPrompt = null;
+    renderInstallState();
+    if (outcome === 'dismissed') toast('설치를 취소했습니다');
+  });
+}
+
 // ── navigation ────────────────────────────────────────────────────────────
 
 function showView(name) {
@@ -446,6 +518,7 @@ function showView(name) {
   }
   if (name === 'history') renderHistory();
   if (name === 'settings') {
+    renderInstallState();
     renderCategoryEditor();
     renderAccountEditor();
     renderDefaultAccount();
@@ -460,7 +533,7 @@ function showView(name) {
 let syncing = false;
 
 async function runSync({ interactive }) {
-  if (syncing || !isConfigured()) return;
+  if (syncing) return;
   syncing = true;
   $('sync-button').classList.add('is-busy');
   try {
@@ -576,22 +649,7 @@ function wire() {
     renderHistory();
   });
 
-  $('sync-button').addEventListener('click', () => {
-    if (!isConfigured()) {
-      showView('settings');
-      toast('먼저 OAuth 클라이언트 ID를 입력하세요');
-      return;
-    }
-    runSync({ interactive: true });
-  });
-
-  const clientIdField = $('setting-client-id');
-  clientIdField.value = state.settings.clientId;
-  clientIdField.addEventListener('change', () => {
-    state.settings = saveSettings({ clientId: clientIdField.value.trim() });
-    disconnect();
-    renderSyncState();
-  });
+  $('sync-button').addEventListener('click', () => runSync({ interactive: true }));
 
   const currencyField = $('setting-currency');
   currencyField.value = state.settings.currency;
@@ -602,20 +660,35 @@ function wire() {
     renderHistory();
   });
 
-  $('sync-connect').addEventListener('click', () => {
-    state.settings = saveSettings({ clientId: clientIdField.value.trim() });
-    runSync({ interactive: true });
-  });
+  $('sync-connect').addEventListener('click', () => runSync({ interactive: true }));
   $('sync-now').addEventListener('click', () => runSync({ interactive: true }));
-  $('sync-disconnect').addEventListener('click', () => {
-    disconnect();
+  $('sync-disconnect').addEventListener('click', async () => {
+    await disconnect();
     renderSyncState();
-    toast('연결을 해제했습니다');
+    toast('로그아웃했습니다');
   });
 
   $('export-csv').addEventListener('click', async () => {
     const records = await list();
-    download(`현금장부-${formatDate(Date.now())}.csv`, toCsv(records), 'text/csv');
+    if (!records.length) {
+      toast('내보낼 기록이 없습니다', 'warn');
+      return;
+    }
+    download(csvFilename(records), toCsv(records), 'text/csv');
+  });
+
+  $('copy-handoff').addEventListener('click', async () => {
+    const records = await list();
+    if (!records.length) {
+      toast('내보낼 기록이 없습니다', 'warn');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(handoffSummary(records));
+      toast('인수인계 요약을 복사했습니다', 'ok');
+    } catch {
+      toast('복사할 수 없습니다', 'warn');
+    }
   });
   $('export-json').addEventListener('click', async () => {
     const records = await allRaw();
@@ -702,6 +775,7 @@ async function refresh() {
 
 async function main() {
   wire();
+  wireInstall();
   onChange(refresh);
 
   renderKeypadStep();
@@ -713,13 +787,23 @@ async function main() {
   await refresh();
   await handleLaunchParams();
 
-  // A silent sync only succeeds if Google still has a live grant for us.
-  if (isConfigured() && state.settings.autoSync) runSync({ interactive: false });
-
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Firebase restores the previous sign-in itself; sync once it reports back.
+  restore()
+    .then((signedIn) => {
+      renderSyncState();
+      if (signedIn && state.settings.autoSync) runSync({ interactive: false });
+    })
+    .catch(() => {
+      /* offline or SDK blocked — the app still works locally */
     });
+
+  // Module scripts are deferred and main() is async, so `load` has usually
+  // fired by now — waiting on it would leave the worker unregistered, and with
+  // it no offline shell and no install prompt on Android.
+  if ('serviceWorker' in navigator) {
+    const register = () => navigator.serviceWorker.register('sw.js').catch(() => {});
+    if (document.readyState === 'complete') register();
+    else window.addEventListener('load', register, { once: true });
   }
 }
 

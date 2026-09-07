@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 const { mergeRecords, normalise, signedAmount, typeFromRow } = await import('../assets/store.js');
-const { toCsv, parseImport, toJson } = await import('../assets/transfer.js');
+const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate } = await import(
+  '../assets/transfer.js'
+);
 
 const base = {
   id: 'a',
@@ -98,7 +100,7 @@ test('merge unions records from both sides', () => {
 
 test('CSV header is the 거래내역 column order in A:G', () => {
   const header = toCsv([]).replace(/^\ufeff/, '').split('\r\n')[0].split(',');
-  assert.deepEqual(header.slice(0, 7), [
+  assert.deepEqual(header, [
     '날짜',
     '계좌',
     '금액',
@@ -121,13 +123,66 @@ test('CSV survives a round trip with commas and quotes intact', () => {
   const parsed = parseImport(toCsv([record]), 'ledger.csv');
 
   assert.equal(parsed.length, 1);
-  assert.equal(parsed[0].id, record.id);
   assert.equal(parsed[0].memo, '점심, "특선"');
   assert.equal(parsed[0].account, '현금');
   assert.equal(parsed[0].amount, 12000);
   assert.equal(parsed[0].type, 'expense');
-  // The CSV drops seconds, so compare to the minute.
-  assert.equal(Math.floor(parsed[0].ts / 60000), Math.floor(record.ts / 60000));
+  assert.equal(parsed[0].category, '식비');
+  assert.equal(parsed[0].source, '현금장부');
+  // The ledger keeps dates, not clock times, so compare to the day.
+  assert.equal(formatDate(parsed[0].ts), formatDate(record.ts));
+});
+
+test('re-importing the same CSV updates rows instead of duplicating them', () => {
+  const csv = toCsv([normalise(base), normalise({ ...base, id: 'b', amount: 300, payee: 'JR' })]);
+  const first = parseImport(csv, 'ledger.csv');
+  const second = parseImport(csv, 'ledger.csv');
+
+  // Content-derived ids, so the second pass lands on the same rows.
+  assert.deepEqual(
+    first.map((r) => r.id),
+    second.map((r) => r.id),
+  );
+  const merged = mergeRecords(first, second);
+  assert.equal(merged.records.length, 2);
+});
+
+test('a changed row gets a different id than the one it replaces', () => {
+  const [a] = parseImport(toCsv([normalise(base)]), 'a.csv');
+  const [b] = parseImport(toCsv([normalise({ ...base, amount: 99 })]), 'b.csv');
+  assert.notEqual(a.id, b.id);
+});
+
+test('export filename carries the period and the row count', () => {
+  const records = [
+    normalise({ ...base, id: 'a', ts: Date.parse('2025-07-20T10:00:00') }),
+    normalise({ ...base, id: 'b', ts: Date.parse('2026-09-07T10:00:00') }),
+  ];
+  assert.equal(csvFilename(records), '현금장부_20250720-20260907_2건.csv');
+});
+
+test('CSV rows come out oldest first, whatever order they went in', () => {
+  const late = normalise({ ...base, id: 'a', ts: Date.parse('2026-09-07T10:00:00') });
+  const early = normalise({ ...base, id: 'b', ts: Date.parse('2025-07-20T10:00:00') });
+  const dates = toCsv([late, early])
+    .replace(/^\ufeff/, '')
+    .split('\r\n')
+    .slice(1, 3)
+    .map((line) => line.split(',')[0]);
+  assert.deepEqual(dates, ['2025-07-20', '2026-09-07']);
+});
+
+test('handoff summary reports the numbers a ledger session verifies against', () => {
+  const records = [
+    normalise({ ...base, id: 'a', type: 'expense', amount: 1735 }),
+    normalise({ ...base, id: 'b', type: 'income', amount: 50000 }),
+    normalise({ ...base, id: 'c', type: 'transfer', amount: 100000 }),
+  ];
+  const summary = handoffSummary(records);
+  assert.match(summary, /지출 1 \/ 수입 1 \/ 이체 1/);
+  assert.match(summary, /지출 합계: 1,735/);
+  assert.match(summary, /수입 합계: 50,000/);
+  assert.match(summary, /이체 합계: 100,000/);
 });
 
 test('a bare 거래내역 export imports without the trailing columns', () => {
