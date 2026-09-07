@@ -252,6 +252,32 @@
         </details>
 
         <details class="card">
+          <summary class="card__title">현금 기초 잔액</summary>
+          <p class="card__note">
+            이 앱을 쓰기 시작한 시점에 지갑에 있던 현금입니다. 워크북과 같은 방식으로
+            <code>거래처 잔고신고 · 범주 수입 · 비고 잔고</code> 인 기록 한 건으로 남습니다. 이걸
+            넣어두면 내역의 현금 잔액과 CSV의 <code>잔액</code> 열이 실제 지갑과 바로 맞습니다.
+          </p>
+          <div class="row">
+            <input
+              class="field"
+              id="opening-amount"
+              type="number"
+              inputmode="numeric"
+              min="0"
+              placeholder="금액"
+              autocomplete="off"
+            />
+            <input class="field" id="opening-date" type="date" aria-label="기준일" />
+          </div>
+          <div class="row">
+            <button class="btn" id="opening-save" type="button">저장</button>
+            <button class="btn btn--ghost" id="opening-clear" type="button">삭제</button>
+          </div>
+          <p class="card__note" id="opening-status"></p>
+        </details>
+
+        <details class="card">
           <summary class="card__title">위젯 · 단축어 연동</summary>
           <p class="card__note">
             아래 주소를 iOS 단축어나 안드로이드 위젯의 “URL 열기”에 넣으면 앱을 여는 즉시 한 건이

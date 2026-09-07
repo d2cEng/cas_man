@@ -188,6 +188,18 @@ test('잔액 열은 계좌별 누계라 서로 섞이지 않는다', () => {
   assert.deepEqual(balances, ['-30000', '30000', '28265']);
 });
 
+test('기초 잔액(잔고신고) 행이 누계의 시작점이 된다', () => {
+  const rows = [
+    normalise({ ...base, id: 'o', ts: Date.parse('2026-09-06T00:00'), account: '현금', amount: 50000, type: 'income', payee: '잔고신고', memo: '잔고' }),
+    normalise({ ...base, id: 'a', ts: Date.parse('2026-09-07T12:00'), account: '현금', amount: 1735, type: 'expense', category: '식비', payee: '', memo: '' }),
+  ];
+  const lines = toCsv(rows).replace(/^\ufeff/, '').split('\r\n');
+
+  // 워크북이 잔고를 선언하는 방식 그대로: 거래처 잔고신고 · 범주 수입 · 비고 잔고
+  assert.equal(lines[1], '2026-09-06,현금,50000,잔고신고,수입,현금장부,잔고,50000');
+  assert.equal(lines[2], '2026-09-07,현금,-1735,,식비,현금장부,,48265');
+});
+
 test('기록상 최종 잔액은 현금을 먼저 보여준다', () => {
   const rows = [
     normalise({ ...base, id: 'a', account: '라쿠텐은행', amount: 30000, type: 'transfer', direction: 'out' }),
