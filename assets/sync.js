@@ -23,6 +23,14 @@ const FIREBASE_CONFIG = {
 const SDK_VERSION = '10.14.1';
 const SDK_BASE = `https://www.gstatic.com/firebasejs/${SDK_VERSION}/`;
 const COLLECTION = 'cashman';
+
+/** The one rule this app needs, ready to paste into the Firebase console. */
+export const REQUIRED_RULE = `match /users/{uid}/${COLLECTION}/{recordId} {
+  allow read, write: if request.auth != null && request.auth.uid == uid;
+}`;
+
+export const RULES_CONSOLE_URL = `https://console.firebase.google.com/project/${FIREBASE_CONFIG.projectId}/firestore/rules`;
+
 const BATCH_LIMIT = 450; // Firestore caps a batch at 500 writes.
 
 let sdkPromise = null;
@@ -168,9 +176,9 @@ function recordsCollection() {
 
 function describeFirestoreError(error) {
   if (error?.code === 'permission-denied') {
-    return new SyncError(
-      'Firestore 보안 규칙이 이 앱의 쓰기를 막고 있습니다. users/{uid} 하위 접근을 허용해 주세요.',
-    );
+    const denied = new SyncError('Firestore 보안 규칙이 막고 있습니다. 설정에서 해결 방법을 확인하세요.');
+    denied.needsRules = true;
+    return denied;
   }
   if (error?.code === 'unavailable') {
     return new SyncError('네트워크에 연결할 수 없습니다.');

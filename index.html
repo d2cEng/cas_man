@@ -130,6 +130,20 @@
             <button class="btn btn--ghost" id="sync-disconnect" type="button">로그아웃</button>
           </div>
           <p class="card__note" id="sync-status">로그인되지 않음</p>
+
+          <div id="rules-help" hidden>
+            <p class="card__note card__note--warn">
+              <strong>Firestore 보안 규칙이 쓰기를 막고 있습니다.</strong> 아래 블록을
+              <a id="rules-console-link" href="#" target="_blank" rel="noopener">Firebase 콘솔 → 규칙</a>
+              의 <code>match /databases/{database}/documents</code> 안쪽에 추가하고 게시하세요.
+              기존 규칙은 그대로 두면 됩니다 — 규칙은 OR로 평가되어, 새 경로용 허용을 더하는 것이
+              기존 권한을 좁히거나 퀴즈 앱을 깨뜨리지 않습니다.
+            </p>
+            <code class="codebox" id="rules-snippet"></code>
+            <div class="row">
+              <button class="btn" id="rules-copy" type="button">규칙 복사</button>
+            </div>
+          </div>
         </details>
 
         <details class="card" id="install-card">
