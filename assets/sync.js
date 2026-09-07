@@ -11,8 +11,10 @@
 
 import {
   allRaw,
+  classifyMissing,
   clearPendingDeletes,
   dropLocal,
+  loadSettings,
   mergeRecords,
   pendingDeletes,
   putMany,
@@ -220,13 +222,28 @@ export async function sync({ interactive = false } = {}) {
       const doomed = [...new Set([...queued, ...staleTombstones])];
 
       const local = await allRaw();
-      const { records, changed } = mergeRecords(local, remote, doomed);
 
-      // Rows the merge dropped — deleted on another device — go from this one
-      // too. putMany only writes, so without this they would linger locally.
+      // A row missing from the cloud but last touched before our previous sync
+      // was deleted on another device; one touched since then just has not been
+      // pushed yet. The watermark is what tells those two apart.
+      const watermark = loadSettings().lastSyncAt || 0;
+      const deletedElsewhere = classifyMissing(
+        local,
+        remote.map((r) => r.id),
+        watermark,
+      );
+
+      const surviving = local.filter((r) => !deletedElsewhere.includes(r.id));
+      const { records, changed } = mergeRecords(surviving, remote, doomed);
+
+      // putMany only writes, so rows the merge dropped are removed explicitly.
       const kept = new Set(records.map((r) => r.id));
-      await dropLocal(local.filter((r) => !kept.has(r.id)).map((r) => r.id));
-      if (changed) await putMany(records);
+      const goneLocally = [
+        ...deletedElsewhere,
+        ...surviving.filter((r) => !kept.has(r.id)).map((r) => r.id),
+      ];
+      await dropLocal(goneLocally);
+      if (changed || goneLocally.length) await putMany(records);
 
       // Push anything the remote copy is missing or holds an older version of.
       const remoteVersions = new Map(remote.map((r) => [r.id, Number(r.updatedAt) || 0]));
@@ -254,7 +271,13 @@ export async function sync({ interactive = false } = {}) {
       clearPendingDeletes(doomed);
 
       saveSettings({ lastSyncAt: Date.now() });
-      return { pulled: changed, pushed: outgoing.length, deleted: toDelete.length, total: records.length };
+      return {
+        pulled: changed,
+        pushed: outgoing.length,
+        removed: goneLocally.length,
+        deleted: toDelete.length,
+        total: records.length,
+      };
     } catch (error) {
       throw error instanceof SyncError ? error : describeFirestoreError(error);
     }

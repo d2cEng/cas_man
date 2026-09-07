@@ -6,9 +6,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-const { mergeRecords, normalise, signedAmount, typeFromRow, directionFromRow } = await import(
-  '../assets/store.js'
-);
+const { mergeRecords, normalise, signedAmount, typeFromRow, directionFromRow, classifyMissing } =
+  await import('../assets/store.js');
 const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances } =
   await import('../assets/transfer.js');
 
@@ -110,6 +109,26 @@ test('다른 기기에서 지운 기록은 병합 결과에서 사라진다', ()
   const { records, changed } = mergeRecords(mine, theirs);
   assert.equal(records.length, 0);
   assert.equal(changed, 1);
+});
+
+test('동기화 시점으로 다른 기기의 삭제와 아직 못 올린 기록을 구분한다', () => {
+  const watermark = 1000;
+  const local = [
+    // 마지막 동기화 전에 올렸던 것 → 클라우드에 없으면 저쪽에서 지운 것
+    normalise({ ...base, id: 'synced', updatedAt: 500 }),
+    // 동기화 후에 만든 것 → 아직 못 올렸을 뿐
+    normalise({ ...base, id: 'fresh', updatedAt: 1500 }),
+    // 클라우드에도 있는 것 → 아무 일 없음
+    normalise({ ...base, id: 'both', updatedAt: 200 }),
+  ];
+
+  assert.deepEqual(classifyMissing(local, ['both'], watermark), ['synced']);
+});
+
+test('첫 동기화에서는 아무것도 지우지 않는다', () => {
+  // lastSyncAt 이 0 이면 올린 적이 없으므로 전부 새 기록이다.
+  const local = [normalise({ ...base, id: 'a', updatedAt: 1 })];
+  assert.deepEqual(classifyMissing(local, [], 0), []);
 });
 
 test('여기서 지운 기록은 클라우드에 남아 있어도 되살아나지 않는다', () => {
