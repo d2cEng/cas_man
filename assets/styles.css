@@ -598,3 +598,56 @@ body[data-type='income'] .amount {
 .codebox {
   white-space: pre-wrap;
 }
+
+/* ── account balances ────────────────────────────────────────────────── */
+
+.balances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.balance {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.balance--cash {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  font-weight: 600;
+}
+
+.balance__name {
+  color: var(--muted);
+}
+
+.balance--cash .balance__name {
+  color: inherit;
+}
+
+.balance__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.balance__value--negative {
+  color: var(--out);
+}
+
+#swap-accounts {
+  width: 100%;
+}
+
+.balances__note {
+  margin: 6px 2px 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
