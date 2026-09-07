@@ -1,24 +1,34 @@
-// Google Drive sync against the caller's own appDataFolder.
+// Firebase sync — same project, sign-in and SDK as the WEB-JA-Quiz app, so no
+// new Google Cloud setup is needed to use this one.
 //
-// There is no backend: the browser talks to Drive directly with a token from
-// Google Identity Services, and the whole ledger lives in one JSON file inside
-// the hidden per-app folder. That keeps the app deployable as plain static
-// files on any host, and keeps the data in the user's own account.
+// Records live at `users/{uid}/cashman/{recordId}`, one document each, beside
+// the quiz app's `users/{uid}/books/*`. Firestore is the transport only: the
+// device's IndexedDB stays the source of truth, and the same per-record
+// last-write-wins merge decides what survives.
+//
+// The apiKey below is safe in a public repo — Firestore security rules, not
+// the key, control who can read and write.
 
 import { allRaw, mergeRecords, putMany, loadSettings, saveSettings } from './store.js';
 
-const GIS_SRC = 'https://accounts.google.com/gsi/client';
-const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-const FILE_NAME = 'cas_man.v1.json';
-const FILES_API = 'https://www.googleapis.com/drive/v3/files';
-const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files';
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyCbJ729H4JHBT5x_IqRLwIga7IyHhb8CE8',
+  authDomain: 'jaquiz-ce805.firebaseapp.com',
+  projectId: 'jaquiz-ce805',
+  storageBucket: 'jaquiz-ce805.firebasestorage.app',
+  messagingSenderId: '342340578538',
+  appId: '1:342340578538:web:3b22f74fa9f626adec3b93',
+};
 
-let gisPromise = null;
-let tokenClient = null;
-let tokenClientId = '';
-let accessToken = '';
-let tokenExpiresAt = 0;
-let cachedFileId = '';
+const SDK_VERSION = '10.14.1';
+const SDK_BASE = `https://www.gstatic.com/firebasejs/${SDK_VERSION}/`;
+const COLLECTION = 'cashman';
+const BATCH_LIMIT = 450; // Firestore caps a batch at 500 writes.
+
+let sdkPromise = null;
+let app = null;
+let currentUser = null;
+let authReady = null;
 let inFlight = null;
 
 export class SyncError extends Error {
@@ -29,194 +39,186 @@ export class SyncError extends Error {
   }
 }
 
+/** The Firebase project is baked in, so there is nothing left to configure. */
 export function isConfigured() {
-  return Boolean(loadSettings().clientId.trim());
+  return Boolean(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.projectId);
 }
 
 export function isConnected() {
-  return Boolean(accessToken) && Date.now() < tokenExpiresAt;
+  return Boolean(currentUser);
 }
 
-/** Drop the in-memory token; the Drive file itself is left untouched. */
-export function disconnect() {
-  if (accessToken && window.google?.accounts?.oauth2) {
-    window.google.accounts.oauth2.revoke(accessToken, () => {});
-  }
-  accessToken = '';
-  tokenExpiresAt = 0;
-  cachedFileId = '';
+/** Display name for the signed-in account, for the settings screen. */
+export function accountLabel() {
+  if (!currentUser) return '';
+  return currentUser.email || currentUser.displayName || currentUser.uid;
 }
 
-function loadGis() {
-  if (window.google?.accounts?.oauth2) return Promise.resolve();
-  if (gisPromise) return gisPromise;
-  gisPromise = new Promise((resolve, reject) => {
+const SDK_TIMEOUT_MS = 15000;
+
+function loadScript(file) {
+  return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = GIS_SRC;
+    // A blocked or stalled CDN can leave onerror pending indefinitely, which
+    // would hang the sign-in button with no feedback. Always settle.
+    const timer = setTimeout(() => {
+      script.remove();
+      reject(new SyncError(`Firebase SDK 응답이 없습니다 (${file}). 네트워크를 확인하세요.`));
+    }, SDK_TIMEOUT_MS);
+
+    const settle = (fn, error) => {
+      clearTimeout(timer);
+      fn(error);
+    };
+
+    script.src = SDK_BASE + file;
     script.async = true;
-    script.onload = () => resolve();
+    script.onload = () => settle(resolve);
     script.onerror = () => {
-      gisPromise = null;
-      reject(new SyncError('구글 로그인 스크립트를 불러오지 못했습니다. 네트워크를 확인하세요.'));
+      script.remove();
+      settle(reject, new SyncError(`Firebase SDK를 불러오지 못했습니다 (${file}).`));
     };
     document.head.appendChild(script);
   });
-  return gisPromise;
 }
 
 /**
- * Get a usable access token.
- * `interactive` decides whether we may show Google's consent popup — popups are
- * blocked unless they originate from a user gesture, so background syncs pass
- * false and simply fail over to "needs consent".
+ * Load the compat SDK and initialise the app once. Resolves after Firebase has
+ * reported the restored sign-in state, so callers never race a returning user.
  */
-async function getToken({ interactive }) {
-  if (isConnected()) return accessToken;
+function ensureSdk() {
+  if (sdkPromise) return sdkPromise;
 
-  const clientId = loadSettings().clientId.trim();
-  if (!clientId) throw new SyncError('OAuth 클라이언트 ID가 설정되지 않았습니다.');
-
-  await loadGis();
-
-  if (!tokenClient || tokenClientId !== clientId) {
-    tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: SCOPE,
-      callback: () => {}, // replaced per request below
-    });
-    tokenClientId = clientId;
-  }
-
-  return new Promise((resolve, reject) => {
-    tokenClient.callback = (response) => {
-      if (response.error) {
-        reject(
-          new SyncError(
-            response.error === 'access_denied'
-              ? '구글 계정 접근이 거부되었습니다.'
-              : `인증에 실패했습니다 (${response.error}).`,
-            { needsConsent: true },
-          ),
-        );
-        return;
-      }
-      accessToken = response.access_token;
-      // Renew a minute early so a long sync can't run past the expiry.
-      tokenExpiresAt = Date.now() + (Number(response.expires_in) || 3600) * 1000 - 60_000;
-      resolve(accessToken);
-    };
-    tokenClient.error_callback = (error) => {
-      reject(new SyncError(`인증 창을 열지 못했습니다 (${error?.type || 'unknown'}).`, {
-        needsConsent: true,
-      }));
-    };
-    try {
-      // '' asks for a silent grant when the user has already consented.
-      tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
-    } catch (error) {
-      reject(new SyncError(String(error?.message || error), { needsConsent: true }));
+  sdkPromise = (async () => {
+    if (!location.protocol.startsWith('http')) {
+      throw new SyncError('동기화는 http(s)에서만 동작합니다.');
     }
-  });
-}
 
-async function api(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: { Authorization: `Bearer ${accessToken}`, ...(options.headers || {}) },
-  });
-  if (response.status === 401 || response.status === 403) {
-    accessToken = '';
-    tokenExpiresAt = 0;
-    throw new SyncError('구글 인증이 만료되었습니다. 다시 연결해 주세요.', { needsConsent: true });
-  }
-  if (!response.ok) {
-    throw new SyncError(`드라이브 요청 실패 (${response.status})`);
-  }
-  return response;
-}
+    // app must be loaded before the auth and firestore bundles attach to it.
+    await loadScript('firebase-app-compat.js');
+    await Promise.all([
+      loadScript('firebase-auth-compat.js'),
+      loadScript('firebase-firestore-compat.js'),
+    ]);
 
-async function findFileId() {
-  if (cachedFileId) return cachedFileId;
-  const query = new URLSearchParams({
-    spaces: 'appDataFolder',
-    q: `name = '${FILE_NAME}' and trashed = false`,
-    fields: 'files(id)',
-    pageSize: '1',
-  });
-  const response = await api(`${FILES_API}?${query}`);
-  const { files = [] } = await response.json();
-  cachedFileId = files[0]?.id || '';
-  return cachedFileId;
-}
+    app = window.firebase.apps.length
+      ? window.firebase.app()
+      : window.firebase.initializeApp(FIREBASE_CONFIG);
 
-async function downloadRemote() {
-  const fileId = await findFileId();
-  if (!fileId) return [];
-  const response = await api(`${FILES_API}/${fileId}?alt=media`);
-  const payload = await response.json().catch(() => null);
-  if (!payload || !Array.isArray(payload.records)) return [];
-  return payload.records;
-}
-
-async function uploadRemote(records) {
-  const body = JSON.stringify({
-    app: 'cas_man',
-    version: 1,
-    updatedAt: Date.now(),
-    records,
-  });
-  const fileId = await findFileId();
-
-  if (fileId) {
-    await api(`${UPLOAD_API}/${fileId}?uploadType=media`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body,
+    authReady = new Promise((resolve) => {
+      const stop = window.firebase.auth().onAuthStateChanged((user) => {
+        currentUser = user || null;
+        stop();
+        resolve();
+      });
     });
-    return;
-  }
+    await authReady;
+    // Keep tracking sign-outs from other tabs after the first resolution.
+    window.firebase.auth().onAuthStateChanged((user) => {
+      currentUser = user || null;
+    });
 
-  const boundary = `cas_man_${Math.random().toString(36).slice(2)}`;
-  const metadata = { name: FILE_NAME, parents: ['appDataFolder'], mimeType: 'application/json' };
-  const multipart =
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-    `${JSON.stringify(metadata)}\r\n` +
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-    `${body}\r\n--${boundary}--`;
-
-  const response = await api(`${UPLOAD_API}?uploadType=multipart&fields=id`, {
-    method: 'POST',
-    headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
-    body: multipart,
+    return app;
+  })().catch((error) => {
+    sdkPromise = null; // let a later attempt retry a transient CDN failure
+    throw error;
   });
-  cachedFileId = (await response.json()).id || '';
+
+  return sdkPromise;
+}
+
+/** Restore a previous session without showing any UI. */
+export async function restore() {
+  await ensureSdk();
+  return isConnected();
+}
+
+export async function signIn() {
+  await ensureSdk();
+  const provider = new window.firebase.auth.GoogleAuthProvider();
+  try {
+    const result = await window.firebase.auth().signInWithPopup(provider);
+    currentUser = result.user;
+  } catch (error) {
+    const code = error?.code || '';
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      throw new SyncError('로그인이 취소되었습니다.', { needsConsent: true });
+    }
+    if (code === 'auth/unauthorized-domain') {
+      throw new SyncError('이 주소는 Firebase 승인된 도메인이 아닙니다.', { needsConsent: true });
+    }
+    throw new SyncError(`로그인에 실패했습니다 (${code || error.message}).`, { needsConsent: true });
+  }
+  return currentUser;
+}
+
+export async function disconnect() {
+  if (!app) return;
+  await window.firebase.auth().signOut();
+  currentUser = null;
+}
+
+function recordsCollection() {
+  return window.firebase
+    .firestore()
+    .collection('users')
+    .doc(currentUser.uid)
+    .collection(COLLECTION);
+}
+
+function describeFirestoreError(error) {
+  if (error?.code === 'permission-denied') {
+    return new SyncError(
+      'Firestore 보안 규칙이 이 앱의 쓰기를 막고 있습니다. users/{uid} 하위 접근을 허용해 주세요.',
+    );
+  }
+  if (error?.code === 'unavailable') {
+    return new SyncError('네트워크에 연결할 수 없습니다.');
+  }
+  return new SyncError(`동기화에 실패했습니다 (${error?.code || error?.message || 'unknown'}).`);
 }
 
 /**
- * Pull, merge, push. Safe to call repeatedly: the merge is per-record and
- * last-write-wins, so two devices converge without a server arbitrating.
+ * Pull, merge, push. Idempotent: the merge is per record and last-write-wins,
+ * so devices converge without anything arbitrating between them.
  */
 export async function sync({ interactive = false } = {}) {
-  if (!isConfigured()) throw new SyncError('OAuth 클라이언트 ID가 설정되지 않았습니다.');
   if (!navigator.onLine) throw new SyncError('오프라인 상태입니다.');
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
-    await getToken({ interactive });
+    await ensureSdk();
+    if (!isConnected()) {
+      if (!interactive) throw new SyncError('로그인이 필요합니다.', { needsConsent: true });
+      await signIn();
+    }
 
-    const remote = await downloadRemote();
-    const local = await allRaw();
-    const { records, changed } = mergeRecords(local, remote);
+    try {
+      const snapshot = await recordsCollection().get();
+      const remote = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
 
-    if (changed) await putMany(records);
+      const local = await allRaw();
+      const { records, changed } = mergeRecords(local, remote);
+      if (changed) await putMany(records);
 
-    // Push whenever the local side holds anything the remote copy lacks.
-    const remoteIds = new Map(remote.map((r) => [r.id, Number(r.updatedAt) || 0]));
-    const needsPush = records.some((r) => (remoteIds.get(r.id) ?? -1) < r.updatedAt);
-    if (needsPush || !remote.length) await uploadRemote(records);
+      // Push anything the remote copy is missing or holds an older version of.
+      const remoteVersions = new Map(remote.map((r) => [r.id, Number(r.updatedAt) || 0]));
+      const outgoing = records.filter((r) => (remoteVersions.get(r.id) ?? -1) < r.updatedAt);
 
-    saveSettings({ lastSyncAt: Date.now() });
-    return { pulled: changed, pushed: needsPush, total: records.length };
+      for (let i = 0; i < outgoing.length; i += BATCH_LIMIT) {
+        const batch = window.firebase.firestore().batch();
+        for (const record of outgoing.slice(i, i + BATCH_LIMIT)) {
+          const { id, ...fields } = record;
+          batch.set(recordsCollection().doc(id), fields);
+        }
+        await batch.commit();
+      }
+
+      saveSettings({ lastSyncAt: Date.now() });
+      return { pulled: changed, pushed: outgoing.length, total: records.length };
+    } catch (error) {
+      throw error instanceof SyncError ? error : describeFirestoreError(error);
+    }
   })().finally(() => {
     inFlight = null;
   });
@@ -224,8 +226,11 @@ export async function sync({ interactive = false } = {}) {
   return inFlight;
 }
 
-/** Explicit connect from the settings screen — always allowed to show consent. */
+/** Explicit connect from the settings screen — may show the sign-in popup. */
 export async function connect() {
-  await getToken({ interactive: true });
+  await ensureSdk();
+  if (!isConnected()) await signIn();
   return sync({ interactive: true });
 }
+
+export { loadSettings };

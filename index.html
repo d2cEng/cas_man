@@ -118,51 +118,56 @@
       <!-- ── 설정 ─────────────────────────────────────────────── -->
       <section class="view" id="view-settings" data-view="settings" hidden>
         <details class="card" open>
-          <summary class="card__title">구글 드라이브 동기화</summary>
+          <summary class="card__title">클라우드 동기화</summary>
           <p class="card__note">
-            기록은 본인 구글 드라이브의 <em>앱 전용 숨김 폴더</em>에 저장됩니다. 다른 파일은 볼 수
-            없고, 앱을 지우면 함께 지워집니다.
-          </p>
-          <label class="label" for="setting-client-id">OAuth 클라이언트 ID</label>
-          <input
-            class="field"
-            id="setting-client-id"
-            type="text"
-            placeholder="xxxxx.apps.googleusercontent.com"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <p class="card__note">
-            발급 방법은
-            <a
-              href="https://github.com/d2cEng/cas_man#구글-드라이브-동기화-설정"
-              target="_blank"
-              rel="noopener"
-              >README</a
-            >를 참고하세요.
+            구글 계정으로 로그인하면 기록이 본인 Firestore 영역
+            <code>users/{uid}/cashman</code> 에 저장되어 기기 간에 동기화됩니다. 일본어 퀴즈 앱과
+            같은 프로젝트·같은 계정을 쓰므로 따로 설정할 것이 없습니다.
           </p>
           <div class="row">
-            <button class="btn" id="sync-connect" type="button">연결</button>
+            <button class="btn" id="sync-connect" type="button">구글 로그인</button>
             <button class="btn btn--ghost" id="sync-now" type="button">지금 동기화</button>
-            <button class="btn btn--ghost" id="sync-disconnect" type="button">연결 해제</button>
+            <button class="btn btn--ghost" id="sync-disconnect" type="button">로그아웃</button>
           </div>
-          <p class="card__note" id="sync-status">연결되지 않음</p>
+          <p class="card__note" id="sync-status">로그인되지 않음</p>
+        </details>
+
+        <details class="card" id="install-card">
+          <summary class="card__title">홈 화면에 설치</summary>
+          <p class="card__note" id="install-note">
+            설치하면 주소창 없이 앱처럼 열리고, 오프라인에서도 입력할 수 있습니다.
+          </p>
+          <div class="row">
+            <button class="btn btn--primary" id="install-button" type="button" hidden>
+              앱 설치
+            </button>
+          </div>
         </details>
 
         <details class="card">
           <summary class="card__title">내보내기 / 가져오기</summary>
           <div class="row">
             <button class="btn" id="export-csv" type="button">거래내역 CSV</button>
-            <button class="btn" id="export-json" type="button">JSON 백업</button>
+            <button class="btn" id="copy-handoff" type="button">인수인계 요약 복사</button>
           </div>
           <div class="row">
+            <button class="btn btn--ghost" id="export-json" type="button">JSON 백업</button>
             <label class="btn btn--ghost" for="import-file">파일 가져오기</label>
             <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
           </div>
           <p class="card__note">
-            CSV의 A~G열은 <em>일본 자산 관리</em> 워크북 「거래내역」 시트와 같은
-            <code>날짜·계좌·금액·거래처·범주·출처·비고</code> 순서라 그대로 붙여넣을 수 있습니다.
-            금액은 지출·이체가 음수, 수입이 양수입니다. JSON은 무손실 백업입니다.
+            <strong>거래내역 CSV</strong> — <em>일본 자산 관리</em> 워크북 「거래내역」 시트와 열이
+            동일한(<code>날짜·계좌·금액·거래처·범주·출처·비고</code>) 소스 파일입니다. 날짜
+            오름차순, 금액은 지출·이체 음수 / 수입 양수. 파일명에 기간·건수가 들어가므로
+            <code>archive/</code> 에 그대로 누적하고 <code>_MANIFEST.csv</code> 에 md5를 등록하면
+            됩니다.
+          </p>
+          <p class="card__note">
+            <strong>인수인계 요약</strong> — 건수·합계·기간을 마크다운으로 복사합니다. 코워크
+            세션에 붙여넣으면 규칙 5(독립 검산)의 대조값으로 쓸 수 있습니다.
+          </p>
+          <p class="card__note">
+            <strong>JSON 백업</strong> — 삭제 표식·id까지 포함한 무손실 백업(기기 이전용).
           </p>
         </details>
 

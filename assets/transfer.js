@@ -1,11 +1,12 @@
 // CSV / JSON export and import.
 
-import { normalise, signedAmount, typeFromRow } from './store.js';
+import { contentId, normalise, signedAmount, typeFromRow } from './store.js';
 
-// A:G are exactly the 거래내역 columns of the 일본 자산 관리 workbook, in order, so a
-// copy of those columns pastes straight in. 시각/id/updatedAt trail behind them
-// to keep a re-import lossless without disturbing that layout.
-const COLUMNS = ['날짜', '계좌', '금액', '거래처', '범주', '출처', '비고', '시각', 'id', 'updatedAt'];
+// Exactly the 거래내역 columns of the 일본 자산 관리 workbook, in order and nothing
+// else. The file is meant to land in archive/ as a source original and be read
+// by build_ledger.py, so extra bookkeeping columns would only get in the way —
+// the lossless round trip is the JSON backup's job, not this one's.
+const COLUMNS = ['날짜', '계좌', '금액', '거래처', '범주', '출처', '비고'];
 
 function pad(n) {
   return String(n).padStart(2, '0');
@@ -26,28 +27,69 @@ function escapeCell(value) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+/** Oldest first, like the ledger itself, and deterministic so md5 dedupe works. */
+function forExport(records) {
+  return [...records].sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+}
+
 export function toCsv(records) {
   const rows = [COLUMNS.join(',')];
-  for (const r of records) {
+  for (const r of forExport(records)) {
     rows.push(
-      [
-        formatDate(r.ts),
-        r.account,
-        signedAmount(r),
-        r.payee,
-        r.category,
-        r.source,
-        r.memo,
-        formatTime(r.ts),
-        r.id,
-        r.updatedAt,
-      ]
+      [formatDate(r.ts), r.account, signedAmount(r), r.payee, r.category, r.source, r.memo]
         .map(escapeCell)
         .join(','),
     );
   }
   // BOM so Excel picks UTF-8 instead of mangling the Korean columns.
   return `﻿${rows.join('\r\n')}\r\n`;
+}
+
+/**
+ * Self-describing name so exports accumulate in archive/ without collisions and
+ * the covered period is readable straight off the filename.
+ */
+export function csvFilename(records) {
+  if (!records.length) return '현금장부_빈장부.csv';
+  const sorted = forExport(records);
+  const from = formatDate(sorted[0].ts).replace(/-/g, '');
+  const to = formatDate(sorted[sorted.length - 1].ts).replace(/-/g, '');
+  return `현금장부_${from}-${to}_${records.length}건.csv`;
+}
+
+/**
+ * The numbers a Cowork session needs for rule 5 (독립 검산) and rule 6 (출처 계보),
+ * as a markdown block to paste into the handoff prompt.
+ */
+export function handoffSummary(records) {
+  const sorted = forExport(records);
+  const sum = (type) =>
+    sorted.filter((r) => r.type === type).reduce((total, r) => total + r.amount, 0);
+  const count = (type) => sorted.filter((r) => r.type === type).length;
+  const yen = (n) => n.toLocaleString('ko-KR');
+
+  const period = sorted.length
+    ? `${formatDate(sorted[0].ts)} ~ ${formatDate(sorted[sorted.length - 1].ts)}`
+    : '(없음)';
+
+  const accounts = [...new Set(sorted.map((r) => r.account))].join(', ') || '(없음)';
+  const sources = [...new Set(sorted.map((r) => r.source))].join(', ') || '(없음)';
+
+  return [
+    '## 현금장부 내보내기',
+    '',
+    `- 파일: \`${csvFilename(records)}\``,
+    `- 기간: ${period}`,
+    `- 건수: ${sorted.length}건 (지출 ${count('expense')} / 수입 ${count('income')} / 이체 ${count('transfer')})`,
+    `- 지출 합계: ${yen(sum('expense'))}`,
+    `- 수입 합계: ${yen(sum('income'))}`,
+    `- 이체 합계: ${yen(sum('transfer'))} (수입·지출 집계 제외)`,
+    `- 계좌: ${accounts}`,
+    `- 출처: ${sources}`,
+    '',
+    '열 구성은 거래내역 시트와 동일(`날짜,계좌,금액,거래처,범주,출처,비고`), 날짜 오름차순.',
+    '금액은 지출·이체 음수 / 수입 양수. archive/ 에 넣고 _MANIFEST.csv 에 md5 등록하세요.',
+  ].join('\n');
 }
 
 export function toJson(records) {
@@ -123,8 +165,7 @@ function fromCsv(text) {
     const cells = parseCsvLine(line);
     const signed = Number(String(at(cells, '금액')).replace(/[^0-9.-]/g, ''));
     const category = at(cells, '범주');
-    return normalise({
-      id: at(cells, 'id') || undefined,
+    const record = normalise({
       ts: parseTimestamp(at(cells, '날짜'), at(cells, '시각')),
       account: at(cells, '계좌'),
       amount: signed,
@@ -135,6 +176,9 @@ function fromCsv(text) {
       source: at(cells, '출처') || '가져오기',
       updatedAt: Number(at(cells, 'updatedAt')) || Date.now(),
     });
+    // An explicit id wins; otherwise hash the content so re-importing the same
+    // file updates the same rows instead of duplicating them.
+    return { ...record, id: at(cells, 'id') || contentId(record) };
   });
 }
 
