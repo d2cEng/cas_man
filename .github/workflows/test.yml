@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No dependencies to install — the app and its tests are plain ES modules.
+      - run: node --test tests/*.test.mjs
+
+      - name: Icons are up to date with tools/make_icons.py
+        run: |
+          python3 tools/make_icons.py
+          git diff --exit-code -- icons/
