@@ -686,3 +686,96 @@ body[data-type='income'] .amount {
   color: var(--muted);
   cursor: pointer;
 }
+
+/* ── settings ────────────────────────────────────────────────────────── */
+
+.section {
+  margin: 20px 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.section:first-child {
+  margin-top: 6px;
+}
+
+.card {
+  transition: border-color 0.15s ease;
+}
+
+.card[open] {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--line));
+}
+
+/* Chevron affordance so a collapsed card reads as openable. */
+.card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  list-style: none;
+  padding: 2px 0;
+}
+
+.card__title::-webkit-details-marker {
+  display: none;
+}
+
+.card__title::after {
+  content: '›';
+  font-size: 19px;
+  line-height: 1;
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.card[open] > .card__title::after {
+  transform: rotate(270deg);
+}
+
+.statusline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 2px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.statusline__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.statusline__dot[data-state='on'] {
+  background: var(--brand);
+}
+
+.statusline__dot[data-state='idle'] {
+  background: #f59e0b;
+}
+
+.card__note strong {
+  color: var(--text);
+}
+
+.card code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+}
+
+.card .codebox {
+  padding: 10px;
+}
