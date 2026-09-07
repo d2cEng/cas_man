@@ -12,11 +12,13 @@
 import {
   allRaw,
   classifyMissing,
-  clearPendingDeletes,
+  DELETION_TTL_MS,
   dropLocal,
+  forgetDeletions,
+  knownDeletions,
   loadSettings,
+  mergeDeletions,
   mergeRecords,
-  pendingDeletes,
   putMany,
   saveSettings,
 } from './store.js';
@@ -33,10 +35,12 @@ const FIREBASE_CONFIG = {
 const SDK_VERSION = '10.14.1';
 const SDK_BASE = `https://www.gstatic.com/firebasejs/${SDK_VERSION}/`;
 const COLLECTION = 'cashman';
+const DELETIONS = 'cashman_deletions';
 
 /** The one rule this app needs, ready to paste into the Firebase console. */
-export const REQUIRED_RULE = `match /users/{uid}/${COLLECTION}/{recordId} {
-  allow read, write: if request.auth != null && request.auth.uid == uid;
+export const REQUIRED_RULE = `match /users/{uid}/{collection}/{docId} {
+  allow read, write: if request.auth != null && request.auth.uid == uid
+    && collection in ['${COLLECTION}', '${DELETIONS}'];
 }`;
 
 export const RULES_CONSOLE_URL = `https://console.firebase.google.com/project/${FIREBASE_CONFIG.projectId}/firestore/rules`;
@@ -176,12 +180,17 @@ export async function disconnect() {
   currentUser = null;
 }
 
+function userDoc() {
+  return window.firebase.firestore().collection('users').doc(currentUser.uid);
+}
+
 function recordsCollection() {
-  return window.firebase
-    .firestore()
-    .collection('users')
-    .doc(currentUser.uid)
-    .collection(COLLECTION);
+  return userDoc().collection(COLLECTION);
+}
+
+/** Id + timestamp per deleted row; the row itself is gone. */
+function deletionsCollection() {
+  return userDoc().collection(DELETIONS);
 }
 
 function describeFirestoreError(error) {
@@ -212,70 +221,101 @@ export async function sync({ interactive = false } = {}) {
     }
 
     try {
-      const snapshot = await recordsCollection().get();
-      const remote = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
+      const [recordSnap, deletionSnap] = await Promise.all([
+        recordsCollection().get(),
+        deletionsCollection().get(),
+      ]);
+      const remote = recordSnap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
 
-      // Rows deleted on this device, plus any tombstone an older version left
-      // behind up there — both are meant to be gone, so clear them for good.
-      const queued = pendingDeletes();
-      const staleTombstones = remote.filter((r) => r.deleted).map((r) => r.id);
-      const doomed = [...new Set([...queued, ...staleTombstones])];
+      // ── deletions ─────────────────────────────────────────────────────
+      // Merge both sides' logs, newest deletion per id wins.
+      const deletions = { ...knownDeletions() };
+      const remoteDeletions = {};
+      for (const doc of deletionSnap.docs) {
+        const at = Number(doc.data().deletedAt) || 0;
+        remoteDeletions[doc.id] = at;
+        deletions[doc.id] = Math.max(deletions[doc.id] || 0, at);
+      }
+      // A tombstone left by an older version means the row is gone as of then.
+      for (const r of remote.filter((r) => r.deleted)) {
+        const at = Number(r.updatedAt) || Date.now();
+        deletions[r.id] = Math.max(deletions[r.id] || 0, at);
+      }
 
       const local = await allRaw();
 
-      // A row missing from the cloud but last touched before our previous sync
-      // was deleted on another device; one touched since then just has not been
-      // pushed yet. The watermark is what tells those two apart.
+      // An edit made after the deletion brings the row back, and retires the
+      // log entry so it stops competing. Otherwise the deletion stands.
+      const resurrected = local
+        .filter((r) => deletions[r.id] && r.updatedAt > deletions[r.id])
+        .map((r) => r.id);
+      for (const id of resurrected) delete deletions[id];
+
+      const doomed = Object.keys(deletions);
+
+      // Backstop for deletions whose log entry has already expired: a row
+      // missing from the cloud but last touched before our previous sync was
+      // deleted elsewhere; one touched since then simply has not been pushed.
       const watermark = loadSettings().lastSyncAt || 0;
       const deletedElsewhere = classifyMissing(
         local,
         remote.map((r) => r.id),
         watermark,
-      );
+      ).filter((id) => !resurrected.includes(id));
 
-      const surviving = local.filter((r) => !deletedElsewhere.includes(r.id));
-      const { records, changed } = mergeRecords(surviving, remote, doomed);
+      const gone = new Set([...doomed, ...deletedElsewhere]);
+      const surviving = local.filter((r) => !gone.has(r.id));
+      const { records, changed } = mergeRecords(surviving, remote, [...gone]);
 
       // putMany only writes, so rows the merge dropped are removed explicitly.
       const kept = new Set(records.map((r) => r.id));
-      const goneLocally = [
-        ...deletedElsewhere,
-        ...surviving.filter((r) => !kept.has(r.id)).map((r) => r.id),
-      ];
+      const goneLocally = local.filter((r) => !kept.has(r.id)).map((r) => r.id);
       await dropLocal(goneLocally);
       if (changed || goneLocally.length) await putMany(records);
 
-      // Push anything the remote copy is missing or holds an older version of.
+      // ── push ──────────────────────────────────────────────────────────
       const remoteVersions = new Map(remote.map((r) => [r.id, Number(r.updatedAt) || 0]));
       const outgoing = records.filter((r) => (remoteVersions.get(r.id) ?? -1) < r.updatedAt);
 
-      for (let i = 0; i < outgoing.length; i += BATCH_LIMIT) {
-        const batch = window.firebase.firestore().batch();
-        for (const record of outgoing.slice(i, i + BATCH_LIMIT)) {
-          const { id, deleted, ...fields } = record;
-          batch.set(recordsCollection().doc(id), fields);
+      const cutoff = Date.now() - DELETION_TTL_MS;
+      const remoteIds = new Set(remote.map((r) => r.id));
+      const writes = [];
+
+      for (const record of outgoing) {
+        const { id, deleted, ...fields } = record;
+        writes.push((batch) => batch.set(recordsCollection().doc(id), fields));
+      }
+      for (const [id, at] of Object.entries(deletions)) {
+        // The record document goes, and the log entry takes its place.
+        if (remoteIds.has(id)) writes.push((b) => b.delete(recordsCollection().doc(id)));
+        if (remoteDeletions[id] !== at) {
+          writes.push((b) => b.set(deletionsCollection().doc(id), { deletedAt: at }));
         }
+      }
+      for (const id of resurrected) {
+        if (remoteDeletions[id]) writes.push((b) => b.delete(deletionsCollection().doc(id)));
+      }
+      // Expired entries have done their job; both sides forget them.
+      const stale = Object.entries(remoteDeletions)
+        .filter(([, at]) => at <= cutoff)
+        .map(([id]) => id);
+      for (const id of stale) writes.push((b) => b.delete(deletionsCollection().doc(id)));
+
+      for (let i = 0; i < writes.length; i += BATCH_LIMIT) {
+        const batch = window.firebase.firestore().batch();
+        for (const write of writes.slice(i, i + BATCH_LIMIT)) write(batch);
         await batch.commit();
       }
 
-      // Only drop the local queue once the cloud copies are actually gone.
-      const remoteIds = new Set(remote.map((r) => r.id));
-      const toDelete = doomed.filter((id) => remoteIds.has(id));
-      for (let i = 0; i < toDelete.length; i += BATCH_LIMIT) {
-        const batch = window.firebase.firestore().batch();
-        for (const id of toDelete.slice(i, i + BATCH_LIMIT)) {
-          batch.delete(recordsCollection().doc(id));
-        }
-        await batch.commit();
-      }
-      clearPendingDeletes(doomed);
+      mergeDeletions(deletions);
+      forgetDeletions([...resurrected, ...stale]);
 
       saveSettings({ lastSyncAt: Date.now() });
       return {
         pulled: changed,
         pushed: outgoing.length,
         removed: goneLocally.length,
-        deleted: toDelete.length,
+        deleted: Object.keys(deletions).length,
         total: records.length,
       };
     } catch (error) {
