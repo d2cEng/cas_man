@@ -2,11 +2,11 @@
 
 import { contentId, directionFromRow, normalise, signedAmount, typeFromRow } from './store.js';
 
-// Exactly the 거래내역 columns of the 일본 자산 관리 workbook, in order and nothing
-// else. The file is meant to land in archive/ as a source original and be read
-// by build_ledger.py, so extra bookkeeping columns would only get in the way —
-// the lossless round trip is the JSON backup's job, not this one's.
-const COLUMNS = ['날짜', '계좌', '금액', '거래처', '범주', '출처', '비고'];
+// A:G are exactly the 거래내역 columns of the 일본 자산 관리 workbook, in order, so
+// the file drops into archive/ as a source original and build_ledger.py reads it
+// unchanged. 잔액 trails behind them as H: a derived column, there so the ledger
+// balance can be held against the cash actually in hand.
+const COLUMNS = ['날짜', '계좌', '금액', '거래처', '범주', '출처', '비고', '잔액'];
 
 function pad(n) {
   return String(n).padStart(2, '0');
@@ -34,15 +34,41 @@ function forExport(records) {
 
 export function toCsv(records) {
   const rows = [COLUMNS.join(',')];
+
+  // Running balance per 계좌, in the order the rows are written. It only means
+  // anything while that order holds, which is why the export is always sorted.
+  const running = new Map();
+
   for (const r of forExport(records)) {
+    const balance = (running.get(r.account) || 0) + signedAmount(r);
+    running.set(r.account, balance);
+
     rows.push(
-      [formatDate(r.ts), r.account, signedAmount(r), r.payee, r.category, r.source, r.memo]
+      [
+        formatDate(r.ts),
+        r.account,
+        signedAmount(r),
+        r.payee,
+        r.category,
+        r.source,
+        r.memo,
+        balance,
+      ]
         .map(escapeCell)
         .join(','),
     );
   }
   // BOM so Excel picks UTF-8 instead of mangling the Korean columns.
   return `﻿${rows.join('\r\n')}\r\n`;
+}
+
+/** Closing balance per 계좌 over the whole export, cash first. */
+export function closingBalances(records) {
+  const totals = new Map();
+  for (const r of forExport(records)) {
+    totals.set(r.account, (totals.get(r.account) || 0) + signedAmount(r));
+  }
+  return [...totals.entries()].sort(([a], [b]) => (a === '현금' ? -1 : b === '현금' ? 1 : a.localeCompare(b)));
 }
 
 /**
@@ -87,8 +113,14 @@ export function handoffSummary(records) {
     `- 계좌: ${accounts}`,
     `- 출처: ${sources}`,
     '',
-    '열 구성은 거래내역 시트와 동일(`날짜,계좌,금액,거래처,범주,출처,비고`), 날짜 오름차순.',
+    '### 기록상 최종 잔액',
+    '',
+    ...closingBalances(sorted).map(([account, value]) => `- ${account}: ${yen(value)}`),
+    '',
+    'A~G열은 거래내역 시트와 동일(`날짜,계좌,금액,거래처,범주,출처,비고`), 날짜 오름차순.',
+    'H열 `잔액` 은 계좌별 누계(파생값)이므로 정렬을 바꾸면 의미가 깨집니다 — 대조용으로만 쓰세요.',
     '금액은 지출·이체 음수 / 수입 양수. archive/ 에 넣고 _MANIFEST.csv 에 md5 등록하세요.',
+    '기초 잔액이 없는 은행·카드 계좌는 실제 잔고와 다릅니다. 현금은 지갑과 바로 대조됩니다.',
   ].join('\n');
 }
 
