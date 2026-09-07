@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>현금장부</title>
+    <meta name="description" content="전자기록이 남지 않는 현금 결제를 빠르게 기록하고 내보내는 오프라인 우선 가계부." />
+    <meta name="theme-color" content="#16a34a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="현금장부" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <div class="toast-host" id="toast-host" aria-live="polite"></div>
+
+    <header class="appbar">
+      <h1 class="appbar__title">현금장부</h1>
+      <button class="appbar__sync" id="sync-button" type="button" title="구글 드라이브와 동기화">
+        <span class="appbar__sync-dot" id="sync-dot"></span>
+        <span id="sync-label">로컬</span>
+      </button>
+    </header>
+
+    <main>
+      <!-- ── 입력 ─────────────────────────────────────────────── -->
+      <section class="view" id="view-entry" data-view="entry">
+        <div class="entry">
+          <div class="typetoggle" role="group" aria-label="구분">
+            <button type="button" class="typetoggle__btn is-active" data-type="expense">지출</button>
+            <button type="button" class="typetoggle__btn" data-type="income">수입</button>
+            <button type="button" class="typetoggle__btn" data-type="transfer">이체</button>
+          </div>
+
+          <output class="amount" id="amount-display" aria-live="polite">0</output>
+          <p class="amount__hint" id="amount-hint">원</p>
+
+          <div class="chips" id="category-chips" role="group" aria-label="범주"></div>
+
+          <div class="entry__fields">
+            <select class="field" id="field-account" aria-label="계좌"></select>
+            <input
+              class="field"
+              id="field-payee"
+              type="text"
+              placeholder="거래처 (예: 세븐일레븐)"
+              autocomplete="off"
+              enterkeyhint="next"
+            />
+            <input
+              class="field"
+              id="field-memo"
+              type="text"
+              placeholder="비고 (선택)"
+              autocomplete="off"
+              enterkeyhint="done"
+            />
+            <input class="field" id="field-date" type="datetime-local" aria-label="거래 일시" />
+          </div>
+
+          <div class="keypad" id="keypad">
+            <button type="button" data-key="1">1</button>
+            <button type="button" data-key="2">2</button>
+            <button type="button" data-key="3">3</button>
+            <button type="button" data-key="4">4</button>
+            <button type="button" data-key="5">5</button>
+            <button type="button" data-key="6">6</button>
+            <button type="button" data-key="7">7</button>
+            <button type="button" data-key="8">8</button>
+            <button type="button" data-key="9">9</button>
+            <button type="button" id="key-step" data-key="00">00</button>
+            <button type="button" data-key="0">0</button>
+            <button type="button" data-key="back" aria-label="지우기">⌫</button>
+          </div>
+
+          <button class="btn btn--primary btn--save" id="save-button" type="button">저장</button>
+          <button class="btn btn--ghost" id="cancel-edit" type="button" hidden>편집 취소</button>
+        </div>
+      </section>
+
+      <!-- ── 내역 ─────────────────────────────────────────────── -->
+      <section class="view" id="view-history" data-view="history" hidden>
+        <div class="monthbar">
+          <button type="button" id="month-prev" aria-label="이전 달">‹</button>
+          <button type="button" class="monthbar__label" id="month-label"></button>
+          <button type="button" id="month-next" aria-label="다음 달">›</button>
+        </div>
+
+        <div class="summary">
+          <div class="summary__cell">
+            <span class="summary__key">지출</span>
+            <strong class="summary__val summary__val--out" id="sum-expense">0</strong>
+          </div>
+          <div class="summary__cell">
+            <span class="summary__key">수입</span>
+            <strong class="summary__val summary__val--in" id="sum-income">0</strong>
+          </div>
+          <div class="summary__cell">
+            <span class="summary__key">합계</span>
+            <strong class="summary__val" id="sum-net">0</strong>
+          </div>
+        </div>
+
+        <input
+          class="field field--search"
+          id="search"
+          type="search"
+          placeholder="범주·계좌·거래처·비고 검색"
+          autocomplete="off"
+        />
+
+        <div id="history-list" class="history"></div>
+      </section>
+
+      <!-- ── 설정 ─────────────────────────────────────────────── -->
+      <section class="view" id="view-settings" data-view="settings" hidden>
+        <details class="card" open>
+          <summary class="card__title">구글 드라이브 동기화</summary>
+          <p class="card__note">
+            기록은 본인 구글 드라이브의 <em>앱 전용 숨김 폴더</em>에 저장됩니다. 다른 파일은 볼 수
+            없고, 앱을 지우면 함께 지워집니다.
+          </p>
+          <label class="label" for="setting-client-id">OAuth 클라이언트 ID</label>
+          <input
+            class="field"
+            id="setting-client-id"
+            type="text"
+            placeholder="xxxxx.apps.googleusercontent.com"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="card__note">
+            발급 방법은
+            <a
+              href="https://github.com/d2cEng/cas_man#구글-드라이브-동기화-설정"
+              target="_blank"
+              rel="noopener"
+              >README</a
+            >를 참고하세요.
+          </p>
+          <div class="row">
+            <button class="btn" id="sync-connect" type="button">연결</button>
+            <button class="btn btn--ghost" id="sync-now" type="button">지금 동기화</button>
+            <button class="btn btn--ghost" id="sync-disconnect" type="button">연결 해제</button>
+          </div>
+          <p class="card__note" id="sync-status">연결되지 않음</p>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">내보내기 / 가져오기</summary>
+          <div class="row">
+            <button class="btn" id="export-csv" type="button">거래내역 CSV</button>
+            <button class="btn" id="export-json" type="button">JSON 백업</button>
+          </div>
+          <div class="row">
+            <label class="btn btn--ghost" for="import-file">파일 가져오기</label>
+            <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
+          </div>
+          <p class="card__note">
+            CSV의 A~G열은 <em>일본 자산 관리</em> 워크북 「거래내역」 시트와 같은
+            <code>날짜·계좌·금액·거래처·범주·출처·비고</code> 순서라 그대로 붙여넣을 수 있습니다.
+            금액은 지출·이체가 음수, 수입이 양수입니다. JSON은 무손실 백업입니다.
+          </p>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">표시 통화</summary>
+          <p class="card__note">
+            금액은 정수로 저장되고, 통화는 표시에만 쓰입니다. 언제든 바꿔도 기록은 그대로입니다.
+          </p>
+          <select class="field" id="setting-currency">
+            <option value="JPY">円 (일본 엔)</option>
+            <option value="KRW">원 (대한민국 원)</option>
+            <option value="USD">$ (미국 달러)</option>
+          </select>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">범주 관리</summary>
+          <div class="chips chips--editable" id="category-editor"></div>
+          <div class="row">
+            <input class="field" id="new-category" type="text" placeholder="새 범주" autocomplete="off" />
+            <button class="btn" id="add-category" type="button">추가</button>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">계좌 관리</summary>
+          <label class="label" for="setting-default-account">기본 계좌</label>
+          <select class="field" id="setting-default-account"></select>
+          <div class="chips chips--editable" id="account-editor"></div>
+          <div class="row">
+            <input class="field" id="new-account" type="text" placeholder="새 계좌" autocomplete="off" />
+            <button class="btn" id="add-account" type="button">추가</button>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">위젯 · 단축어 연동</summary>
+          <p class="card__note">
+            아래 주소를 iOS 단축어나 안드로이드 위젯의 “URL 열기”에 넣으면 앱을 여는 즉시 한 건이
+            기록됩니다.
+          </p>
+          <div class="row">
+            <input class="field" id="widget-amount" type="number" inputmode="numeric" placeholder="금액" />
+            <select class="field" id="widget-category"></select>
+            <select class="field" id="widget-account"></select>
+          </div>
+          <label class="label"><input type="checkbox" id="widget-instant" checked /> 열자마자 바로 저장</label>
+          <code class="codebox" id="widget-url"></code>
+          <div class="row">
+            <button class="btn" id="widget-copy" type="button">주소 복사</button>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary class="card__title">데이터</summary>
+          <p class="card__note" id="stats-line"></p>
+          <div class="row">
+            <button class="btn btn--danger" id="wipe" type="button">모든 기록 삭제</button>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <nav class="tabbar">
+      <button type="button" class="tabbar__btn is-active" data-target="entry">
+        <span class="tabbar__icon">＋</span>입력
+      </button>
+      <button type="button" class="tabbar__btn" data-target="history">
+        <span class="tabbar__icon">▤</span>내역
+      </button>
+      <button type="button" class="tabbar__btn" data-target="settings">
+        <span class="tabbar__icon">⚙</span>설정
+      </button>
+    </nav>
+
+    <script type="module" src="assets/app.js"></script>
+  </body>
+</html>

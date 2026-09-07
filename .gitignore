@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+*.log
+
+# Local exports and backups — these hold real transaction data.
+*.csv
+*.json
+!package.json
+!manifest.webmanifest
