@@ -46,7 +46,8 @@ python3 -m http.server 8080
 ## 배포
 
 `main` 브랜치에 푸시하면 `.github/workflows/pages.yml` 이 GitHub Pages로 배포합니다.
-저장소 **Settings → Pages → Source** 를 *GitHub Actions* 로 한 번만 바꿔주면 됩니다.
+워크플로가 첫 실행에서 Pages를 알아서 켜므로 따로 설정할 것은 없습니다. (조직 정책 때문에
+자동 활성화가 막혀 있다면 **Settings → Pages → Source** 를 *GitHub Actions* 로 바꿔주세요.)
 
 다른 호스팅을 쓴다면 저장소 전체를 정적 파일로 업로드하기만 하면 됩니다. 경로가 모두 상대
 경로라 `https://example.com/` 든 `https://example.com/ledger/` 든 그대로 동작합니다.
