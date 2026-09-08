@@ -107,8 +107,11 @@ def fetch(key_path: Path, uid: str | None) -> list[dict]:
     records = []
     for doc in db.collection(f"users/{uid}/{COLLECTION}").stream():
         record = doc.to_dict() or {}
-        if record.get("deleted"):
-            continue  # tombstones exist to propagate deletions, not to export
+        # A deleted row's document is replaced by a stub carrying only its
+        # deletion time. Stubs propagate deletions between devices; they are not
+        # records, and they carry none of the fields below.
+        if record.get("tombstone") or record.get("deleted"):
+            continue
         record["id"] = doc.id
         record["ts"] = int(record.get("ts") or 0)
         records.append(record)
