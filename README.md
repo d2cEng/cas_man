@@ -90,8 +90,7 @@ python3 -m http.server 8080
 기록은 본인 계정 아래에만 저장됩니다.
 
 ```
-users/{uid}/cashman/{recordId}            기록
-users/{uid}/cashman_deletions/{recordId}  삭제 로그 (id + 삭제시각, 90일 후 자동 정리)
+users/{uid}/cashman/{recordId}
 ```
 
 `apiKey` 가 저장소에 그대로 있는 것은 정상입니다. 접근 제어는 키가 아니라 **Firestore 보안
@@ -113,9 +112,8 @@ users/{uid}/cashman_deletions/{recordId}  삭제 로그 (id + 삭제시각, 90�
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{uid}/{collection}/{docId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid
-        && collection in ['cashman', 'cashman_deletions'];
+    match /users/{uid}/cashman/{recordId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
     }
   }
 }
@@ -136,8 +134,10 @@ service cloud.firestore {
 
 ### 삭제 로그
 
-지운 기록은 바로 사라지지만, **id 와 삭제 시각만** 따로 남깁니다. 기록 본문이 아니라 약 50바이트
-짜리 항목이고(기록 한 건은 ~200바이트), **90일이 지나면 양쪽에서 자동 정리**됩니다.
+지운 기록은 바로 사라지지만, 클라우드의 그 문서는 **삭제 시각만 담은 조각**으로 바뀝니다
+(`{ tombstone: true, deletedAt }`). 기록 본문이 아니라 약 50바이트짜리이고(기록 한 건은
+~200바이트), **90일이 지나면 양쪽에서 자동 정리**됩니다. 같은 컬렉션 안에 두므로 이것 때문에
+보안 규칙을 손댈 일은 없습니다.
 
 이 로그가 있어야 `삭제` 와 `수정` 이 부딪혔을 때 판단할 수 있습니다.
 

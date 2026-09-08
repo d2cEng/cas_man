@@ -35,12 +35,10 @@ const FIREBASE_CONFIG = {
 const SDK_VERSION = '10.14.1';
 const SDK_BASE = `https://www.gstatic.com/firebasejs/${SDK_VERSION}/`;
 const COLLECTION = 'cashman';
-const DELETIONS = 'cashman_deletions';
 
 /** The one rule this app needs, ready to paste into the Firebase console. */
-export const REQUIRED_RULE = `match /users/{uid}/{collection}/{docId} {
-  allow read, write: if request.auth != null && request.auth.uid == uid
-    && collection in ['${COLLECTION}', '${DELETIONS}'];
+export const REQUIRED_RULE = `match /users/{uid}/${COLLECTION}/{recordId} {
+  allow read, write: if request.auth != null && request.auth.uid == uid;
 }`;
 
 export const RULES_CONSOLE_URL = `https://console.firebase.google.com/project/${FIREBASE_CONFIG.projectId}/firestore/rules`;
@@ -180,17 +178,30 @@ export async function disconnect() {
   currentUser = null;
 }
 
-function userDoc() {
-  return window.firebase.firestore().collection('users').doc(currentUser.uid);
-}
-
 function recordsCollection() {
-  return userDoc().collection(COLLECTION);
+  return window.firebase
+    .firestore()
+    .collection('users')
+    .doc(currentUser.uid)
+    .collection(COLLECTION);
 }
 
-/** Id + timestamp per deleted row; the row itself is gone. */
-function deletionsCollection() {
-  return userDoc().collection(DELETIONS);
+/**
+ * A deleted row's document is replaced by this stub — the record's fields are
+ * gone, leaving only when it was deleted. Keeping it in the same collection
+ * means the security rule never has to change for it, and the 90-day purge
+ * stops the stubs accumulating.
+ */
+function tombstone(at) {
+  return { tombstone: true, deletedAt: at };
+}
+
+/** Deletion time if this remote doc is a stub, otherwise 0. */
+function tombstoneAt(doc) {
+  if (doc.tombstone) return Number(doc.deletedAt) || 0;
+  // An older version marked deletions with `deleted` on the full record.
+  if (doc.deleted) return Number(doc.updatedAt) || 0;
+  return 0;
 }
 
 function describeFirestoreError(error) {
@@ -221,25 +232,23 @@ export async function sync({ interactive = false } = {}) {
     }
 
     try {
-      const [recordSnap, deletionSnap] = await Promise.all([
-        recordsCollection().get(),
-        deletionsCollection().get(),
-      ]);
-      const remote = recordSnap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
+      const snapshot = await recordsCollection().get();
+      const docs = snapshot.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
 
       // ── deletions ─────────────────────────────────────────────────────
-      // Merge both sides' logs, newest deletion per id wins.
-      const deletions = { ...knownDeletions() };
+      // Stubs among the documents are the cloud's deletion log; the rest are
+      // real records. Merge both sides' logs, newest deletion per id winning.
       const remoteDeletions = {};
-      for (const doc of deletionSnap.docs) {
-        const at = Number(doc.data().deletedAt) || 0;
-        remoteDeletions[doc.id] = at;
-        deletions[doc.id] = Math.max(deletions[doc.id] || 0, at);
+      const remote = [];
+      for (const doc of docs) {
+        const at = tombstoneAt(doc);
+        if (at) remoteDeletions[doc.id] = at;
+        else remote.push(doc);
       }
-      // A tombstone left by an older version means the row is gone as of then.
-      for (const r of remote.filter((r) => r.deleted)) {
-        const at = Number(r.updatedAt) || Date.now();
-        deletions[r.id] = Math.max(deletions[r.id] || 0, at);
+
+      const deletions = { ...knownDeletions() };
+      for (const [id, at] of Object.entries(remoteDeletions)) {
+        deletions[id] = Math.max(deletions[id] || 0, at);
       }
 
       const local = await allRaw();
@@ -251,19 +260,17 @@ export async function sync({ interactive = false } = {}) {
         .map((r) => r.id);
       for (const id of resurrected) delete deletions[id];
 
-      const doomed = Object.keys(deletions);
-
       // Backstop for deletions whose log entry has already expired: a row
       // missing from the cloud but last touched before our previous sync was
       // deleted elsewhere; one touched since then simply has not been pushed.
       const watermark = loadSettings().lastSyncAt || 0;
       const deletedElsewhere = classifyMissing(
         local,
-        remote.map((r) => r.id),
+        docs.map((r) => r.id),
         watermark,
       ).filter((id) => !resurrected.includes(id));
 
-      const gone = new Set([...doomed, ...deletedElsewhere]);
+      const gone = new Set([...Object.keys(deletions), ...deletedElsewhere]);
       const surviving = local.filter((r) => !gone.has(r.id));
       const { records, changed } = mergeRecords(surviving, remote, [...gone]);
 
@@ -278,28 +285,26 @@ export async function sync({ interactive = false } = {}) {
       const outgoing = records.filter((r) => (remoteVersions.get(r.id) ?? -1) < r.updatedAt);
 
       const cutoff = Date.now() - DELETION_TTL_MS;
-      const remoteIds = new Set(remote.map((r) => r.id));
       const writes = [];
 
       for (const record of outgoing) {
         const { id, deleted, ...fields } = record;
         writes.push((batch) => batch.set(recordsCollection().doc(id), fields));
       }
+      // The record document is replaced by its stub, not removed, so other
+      // devices can still learn when it was deleted.
       for (const [id, at] of Object.entries(deletions)) {
-        // The record document goes, and the log entry takes its place.
-        if (remoteIds.has(id)) writes.push((b) => b.delete(recordsCollection().doc(id)));
         if (remoteDeletions[id] !== at) {
-          writes.push((b) => b.set(deletionsCollection().doc(id), { deletedAt: at }));
+          writes.push((b) => b.set(recordsCollection().doc(id), tombstone(at)));
         }
       }
-      for (const id of resurrected) {
-        if (remoteDeletions[id]) writes.push((b) => b.delete(deletionsCollection().doc(id)));
-      }
-      // Expired entries have done their job; both sides forget them.
+      // A resurrected row needs no delete: its record write above lands on the
+      // same document and overwrites the stub.
+      // Expired stubs have done their job; both sides forget them.
       const stale = Object.entries(remoteDeletions)
         .filter(([, at]) => at <= cutoff)
         .map(([id]) => id);
-      for (const id of stale) writes.push((b) => b.delete(deletionsCollection().doc(id)));
+      for (const id of stale) writes.push((b) => b.delete(recordsCollection().doc(id)));
 
       for (let i = 0; i < writes.length; i += BATCH_LIMIT) {
         const batch = window.firebase.firestore().batch();
