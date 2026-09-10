@@ -214,6 +214,7 @@ function resetEntry() {
   $('save-button').textContent = '저장';
   $('cancel-edit').hidden = true;
   renderAmount();
+  applyUpdateIfIdle();
 }
 
 function pressKey(key) {
@@ -786,6 +787,63 @@ function wireInstall() {
   });
 }
 
+// ── service worker ────────────────────────────────────────────────────────
+
+let pendingReload = false;
+
+/**
+ * Reload to pick up a new version, but never mid-entry.
+ *
+ * The records themselves are in IndexedDB and survive a reload; what would be
+ * lost is a half-typed amount, so the update waits until the form is idle.
+ */
+function applyUpdateIfIdle() {
+  if (!pendingReload) return;
+  if (state.amount > 0 || state.editingId) return;
+  location.reload();
+}
+
+/**
+ * Register the worker and let the app update itself.
+ *
+ * An installed PWA usually resumes from the app switcher rather than reloading,
+ * so a deployed fix could sit unused indefinitely while the tab kept running
+ * the JavaScript it started with. Checking on every resume and reloading once
+ * the new worker takes over closes that gap.
+ */
+function wireServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  // Fires for the very first worker too; only a *replacement* means new code.
+  const hadController = Boolean(navigator.serviceWorker.controller);
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    pendingReload = true;
+    toast('새 버전을 적용합니다');
+    applyUpdateIfIdle();
+  });
+
+  const register = async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('sw.js');
+      const checkForUpdate = () => registration.update().catch(() => {});
+      checkForUpdate();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkForUpdate();
+      });
+    } catch {
+      /* offline, or the worker is unavailable — the app still runs */
+    }
+  };
+
+  // Module scripts are deferred and main() is async, so `load` has usually
+  // fired by now — waiting on it would leave the worker unregistered, and with
+  // it no offline shell and no install prompt on Android.
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
+}
+
 // ── navigation ────────────────────────────────────────────────────────────
 
 function showView(name) {
@@ -1147,14 +1205,7 @@ async function main() {
       /* offline or SDK blocked — the app still works locally */
     });
 
-  // Module scripts are deferred and main() is async, so `load` has usually
-  // fired by now — waiting on it would leave the worker unregistered, and with
-  // it no offline shell and no install prompt on Android.
-  if ('serviceWorker' in navigator) {
-    const register = () => navigator.serviceWorker.register('sw.js').catch(() => {});
-    if (document.readyState === 'complete') register();
-    else window.addEventListener('load', register, { once: true });
-  }
+  wireServiceWorker();
 }
 
 main();
