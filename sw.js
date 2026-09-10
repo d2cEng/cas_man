@@ -1,5 +1,5 @@
 // Offline shell. Bump CACHE when any precached file changes.
-const CACHE = 'cas-man-v3';
+const CACHE = 'cas-man-v4';
 
 // Relative URLs so the app works from any path on any static host.
 const SHELL = [
