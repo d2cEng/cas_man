@@ -410,39 +410,27 @@ function visibleRows(records) {
  * you whether the cash in your pocket matches the ledger.
  */
 function renderBalances() {
-  const totals = new Map();
-  for (const record of state.records) {
-    totals.set(record.account, (totals.get(record.account) || 0) + signedAmount(record));
-  }
+  // This app records cash flow only. The other side of a 이체 — 은행, 와리깡 —
+  // is where the cash came from or went, not an account kept here, so its
+  // running total would be half a story. Only the cash balance is shown.
+  const home = state.settings.defaultAccount;
+  const value = state.records
+    .filter((record) => record.account === home)
+    .reduce((total, record) => total + signedAmount(record), 0);
 
-  const host = $('balances');
-  host.textContent = '';
+  const chip = document.createElement('div');
+  chip.className = 'balance balance--cash';
 
-  const entries = [...totals.entries()]
-    .filter(([, value]) => value !== 0)
-    // Cash first — it is what this ledger exists to track.
-    .sort(([a, av], [b, bv]) =>
-      a === '현금' ? -1 : b === '현금' ? 1 : Math.abs(bv) - Math.abs(av),
-    );
+  const name = document.createElement('span');
+  name.className = 'balance__name';
+  name.textContent = home;
 
-  // Only worth the caption once something other than cash is on screen.
-  $('balances-note').hidden = !entries.some(([account]) => account !== '현금');
+  const amount = document.createElement('span');
+  amount.className = `balance__value${value < 0 ? ' balance__value--negative' : ''}`;
+  amount.textContent = money(value);
 
-  for (const [account, value] of entries) {
-    const chip = document.createElement('div');
-    chip.className = `balance${account === '현금' ? ' balance--cash' : ''}`;
-
-    const name = document.createElement('span');
-    name.className = 'balance__name';
-    name.textContent = account;
-
-    const amount = document.createElement('span');
-    amount.className = `balance__value${value < 0 ? ' balance__value--negative' : ''}`;
-    amount.textContent = money(value);
-
-    chip.append(name, amount);
-    host.appendChild(chip);
-  }
+  chip.append(name, amount);
+  $('balances').replaceChildren(chip);
 }
 
 function renderHistory() {

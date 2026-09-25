@@ -645,13 +645,6 @@ body[data-type='income'] .amount {
   width: 100%;
 }
 
-.balances__note {
-  margin: 6px 2px 0;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--muted);
-}
-
 /* ── install banner ──────────────────────────────────────────────────── */
 
 .installbar {
