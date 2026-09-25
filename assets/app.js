@@ -14,6 +14,7 @@ import {
   remove,
   saveSettings,
   seedAccounts,
+  renameStoredAccounts,
   allRaw,
   newId as newGroupId,
   knownDeletions,
@@ -1184,8 +1185,12 @@ async function refresh() {
 }
 
 async function main() {
-  // Before the first render, so a newly shipped account is in the selects.
+  // Before the first render, so a newly shipped or renamed account is already
+  // right in the selects.
   state.settings = seedAccounts();
+  await renameStoredAccounts().catch(() => {
+    /* IndexedDB unavailable — the settings rename still stands */
+  });
 
   wire();
   wireInstall();

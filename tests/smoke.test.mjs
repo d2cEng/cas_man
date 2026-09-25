@@ -27,6 +27,7 @@ const {
   saveSettings,
   seedAccounts,
   SEEDED_ACCOUNTS,
+  RENAMED_ACCOUNTS,
 } = await import('../assets/store.js');
 const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances } =
   await import('../assets/transfer.js');
@@ -259,30 +260,30 @@ test('기록상 최종 잔액은 현금을 먼저 보여준다', () => {
   ]);
 });
 
-test('뿜빠이는 지출을 내 몫만 남기고 받을 돈을 계좌로 들고 있는다', () => {
+test('와리깡는 지출을 내 몫만 남기고 받을 돈을 계좌로 들고 있는다', () => {
   // 6,000 을 현금으로 계산했고 그중 4,500 은 나중에 돌려받는다.
   const paid = [
     normalise({ ...base, id: 'm', ts: Date.parse('2026-03-04T19:00'), account: '현금', amount: 1500, type: 'expense', category: '식비' }),
     normalise({ ...base, id: 'o', ts: Date.parse('2026-03-04T19:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'out', group: 'g1' }),
-    normalise({ ...base, id: 'i', ts: Date.parse('2026-03-04T19:00'), account: '뿜빠이', amount: 4500, type: 'transfer', direction: 'in', group: 'g1' }),
+    normalise({ ...base, id: 'i', ts: Date.parse('2026-03-04T19:00'), account: '와리깡', amount: 4500, type: 'transfer', direction: 'in', group: 'g1' }),
   ];
 
   // 지갑에서는 6,000 이 빠지지만 지출로 잡히는 건 내 몫 1,500 뿐이다.
   assert.deepEqual(closingBalances(paid), [
     ['현금', -6000],
-    ['뿜빠이', 4500],
+    ['와리깡', 4500],
   ]);
   assert.match(handoffSummary(paid), /지출 합계: 1,500/);
 
-  // 돌려받으면 뿜빠이는 0 으로 닫히고 지갑만 늘어난다.
+  // 돌려받으면 와리깡는 0 으로 닫히고 지갑만 늘어난다.
   const repaid = [
     ...paid,
-    normalise({ ...base, id: 'r', ts: Date.parse('2026-03-06T12:00'), account: '뿜빠이', amount: 4500, type: 'transfer', direction: 'out', group: 'g2' }),
+    normalise({ ...base, id: 'r', ts: Date.parse('2026-03-06T12:00'), account: '와리깡', amount: 4500, type: 'transfer', direction: 'out', group: 'g2' }),
     normalise({ ...base, id: 'c', ts: Date.parse('2026-03-06T12:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'in', group: 'g2' }),
   ];
   assert.deepEqual(closingBalances(repaid), [
     ['현금', -1500],
-    ['뿜빠이', 0],
+    ['와리깡', 0],
   ]);
 
   // 이체는 양쪽이 상쇄되므로 계좌 오라클(차이 0)이 유지된다.
@@ -415,4 +416,28 @@ test('새로 추가된 계좌는 이미 쓰던 설치에도 한 번 들어간다
   saveSettings({ accounts: ['현금', '은행'] });
   assert.deepEqual(seedAccounts().accounts, ['현금', '은행']);
   assert.deepEqual(loadSettings().accounts, ['현금', '은행']);
+});
+
+test('이름이 바뀐 계좌는 설정에서 옛 이름을 대체한다', () => {
+  const [[old, now]] = Object.entries(RENAMED_ACCOUNTS);
+
+  // 옛 이름을 받아간 기기: 계좌 목록과 이체 기본값이 그 이름을 가리킨다.
+  saveSettings({
+    accounts: ['현금', old, '은행'],
+    seededAccounts: [old],
+    transferFrom: '현금',
+    transferTo: old,
+  });
+
+  const migrated = seedAccounts();
+  // 자리를 지킨 채 이름만 바뀌고, 새 이름이 중복으로 덧붙지 않는다.
+  assert.deepEqual(migrated.accounts, ['현금', now, '은행']);
+  assert.equal(migrated.transferTo, now);
+  // 시딩 기록도 함께 옮겨가므로 같은 계좌를 또 넣지 않는다.
+  assert.deepEqual(migrated.seededAccounts, [now]);
+  assert.deepEqual(seedAccounts().accounts, ['현금', now, '은행']);
+
+  // 새 이름을 이미 들고 있으면 둘로 갈라지지 않는다.
+  saveSettings({ accounts: ['현금', old, now], seededAccounts: [now] });
+  assert.deepEqual(seedAccounts().accounts, ['현금', now]);
 });

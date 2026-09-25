@@ -59,8 +59,9 @@ export const DEFAULT_ACCOUNTS = [
   // Not a real account: the placeholder for money that left the wallet but is
   // coming back. Paying for a group puts everyone else's share here as a 이체,
   // so 지출 stays at your own share and this balance is what you are still
-  // owed. It returns to 0 when they pay you.
-  '뿜빠이',
+  // owed. It returns to 0 when they pay you. Named after 割り勘, as the rest of
+  // this list writes Japanese services in Korean letters.
+  '와리깡',
 ];
 
 /**
@@ -71,7 +72,16 @@ export const DEFAULT_ACCOUNTS = [
  * each, and the note that it has happened is what keeps a deliberate removal
  * from being undone on the next launch.
  */
-export const SEEDED_ACCOUNTS = ['뿜빠이'];
+export const SEEDED_ACCOUNTS = ['와리깡'];
+
+/**
+ * Accounts renamed after they had already reached a device.
+ *
+ * Changing DEFAULT_ACCOUNTS only affects a fresh install, so a rename has to
+ * follow the old name everywhere it landed: the saved 계좌 목록, the settings
+ * that point at an account by name, and any record already filed under it.
+ */
+export const RENAMED_ACCOUNTS = { 뿜빠이: '와리깡' };
 
 /**
  * 구분 for each transaction type, matching the 범주별 sheet.
@@ -513,14 +523,46 @@ export function saveSettings(patch) {
  */
 export function seedAccounts() {
   const settings = loadSettings();
-  const done = Array.isArray(settings.seededAccounts) ? settings.seededAccounts : [];
-  const pending = SEEDED_ACCOUNTS.filter((name) => !done.includes(name));
-  if (!pending.length) return settings;
+  const renamed = (name) => RENAMED_ACCOUNTS[name] || name;
+  const patch = {};
 
-  return saveSettings({
-    accounts: [...settings.accounts, ...pending.filter((name) => !settings.accounts.includes(name))],
-    seededAccounts: [...done, ...pending],
-  });
+  // Renames first: the new name may already be in the list under the old one,
+  // and the seed marker has to move with it or the account is added twice.
+  const accounts = [...new Set(settings.accounts.map(renamed))];
+  if (accounts.some((name, i) => name !== settings.accounts[i])) {
+    patch.accounts = accounts;
+    patch.seededAccounts = [
+      ...new Set((settings.seededAccounts || []).map(renamed)),
+    ];
+    for (const key of ['defaultAccount', 'transferFrom', 'transferTo']) {
+      if (RENAMED_ACCOUNTS[settings[key]]) patch[key] = renamed(settings[key]);
+    }
+  }
+
+  const current = patch.accounts || settings.accounts;
+  const done = patch.seededAccounts || (Array.isArray(settings.seededAccounts) ? settings.seededAccounts : []);
+  const pending = SEEDED_ACCOUNTS.filter((name) => !done.includes(name));
+  if (pending.length) {
+    patch.accounts = [...current, ...pending.filter((name) => !current.includes(name))];
+    patch.seededAccounts = [...done, ...pending];
+  }
+
+  return Object.keys(patch).length ? saveSettings(patch) : settings;
+}
+
+/**
+ * Move any record filed under a renamed account onto the new name.
+ *
+ * `updatedAt` is bumped so the change wins the merge and reaches the other
+ * devices; without it the rows would come straight back on the next sync.
+ */
+export async function renameStoredAccounts() {
+  const stale = (await allRaw()).filter((r) => RENAMED_ACCOUNTS[r.account]);
+  if (!stale.length) return 0;
+
+  const now = Date.now();
+  await putMany(stale.map((r) => ({ ...r, account: RENAMED_ACCOUNTS[r.account], updatedAt: now })));
+  return stale.length;
 }
 
 // ── Change notification ───────────────────────────────────────────────────
