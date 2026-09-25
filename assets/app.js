@@ -380,6 +380,23 @@ function counterpartOf(record) {
 }
 
 /**
+ * Sign for a listed row, read from the home 계좌 (현금 by default).
+ *
+ * A 이체 is + when money lands in 현금 and − when it leaves; one that never
+ * touches 현금 is shown unsigned. The list carries only the outgoing half of a
+ * paired 이체, so the row's own sign would read every 이체 as money leaving —
+ * 와리깡 → 현금 included, which is the cash you were just handed.
+ */
+function displaySign(record, counterpart) {
+  if (record.type === 'income') return '+';
+  if (record.type !== 'transfer') return '-';
+  const home = state.settings.defaultAccount;
+  if (counterpart === home) return '+';
+  if (record.account === home) return record.direction === 'in' ? '+' : '-';
+  return '';
+}
+
+/**
  * One line per movement: a 이체 is two rows in the ledger but a single thing
  * that happened, so only its outgoing half is listed.
  */
@@ -492,7 +509,7 @@ function renderRow(record) {
 
   const amount = document.createElement('span');
   amount.className = `row-item__amount row-item__amount--${record.type}`;
-  amount.textContent = `${record.type === 'income' ? '+' : '-'}${num.format(record.amount)}`;
+  amount.textContent = `${displaySign(record, counterpart)}${num.format(record.amount)}`;
 
   const del = document.createElement('button');
   del.type = 'button';
