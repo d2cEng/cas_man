@@ -63,6 +63,8 @@ def for_export(records: list[dict]) -> list[dict]:
     When a 이체's other half stays behind (the bank an ATM withdrawal came out
     of), the row that goes out names it in 비고 instead.
     """
+    # A row flagged deleted is gone, whatever left it stored.
+    records = [r for r in records if not r.get("deleted")]
     halves: dict[str, list[dict]] = {}
     for record in records:
         if record.get("type") == "transfer" and record.get("group"):
@@ -79,6 +81,20 @@ def for_export(records: list[dict]) -> list[dict]:
         exported.append(record)
 
     return sorted(exported, key=lambda r: (r["ts"], r["id"]))
+
+
+def unexported_entries(records: list[dict]) -> list[dict]:
+    """Rows left out that were not meant to be — unexportedEntries() in transfer.js.
+
+    A bank's half of a cash 이체, and its ATM fee, are left out by design.
+    Anything else on an account that is not exported would vanish silently.
+    """
+    live = [r for r in records if not r.get("deleted")]
+    cash_groups = {r["group"] for r in live if r.get("group") and r.get("account") in EXPORTED_ACCOUNTS}
+    return [
+        r for r in live
+        if r.get("account") not in EXPORTED_ACCOUNTS and not (r.get("group") and r["group"] in cash_groups)
+    ]
 
 
 def counterpart_note(record: dict, halves: dict[str, list[dict]]) -> str:
@@ -199,6 +215,13 @@ def main() -> None:
     print("기록상 최종 잔액:")
     for account, value in sorted(balances.items(), key=lambda kv: (kv[0] != CASH, kv[0])):
         print(f"  {account}: {value:,}")
+
+    left = unexported_entries(records)
+    if left:
+        print(f"경고: 현금이 아닌 계좌의 기록 {len(left)}건은 내보내지 않았습니다 — 앱에서 계좌를 확인하세요:")
+        for record in sorted(left, key=lambda r: (r["ts"], r["id"])):
+            day = datetime.fromtimestamp(record["ts"] / 1000, tz).strftime("%Y-%m-%d")
+            print(f"  {day} {record.get('account', '')} {signed_amount(record):,} {record.get('payee', '')}")
 
 
 if __name__ == "__main__":

@@ -28,8 +28,9 @@ const {
   seedAccounts,
   SEEDED_ACCOUNTS,
   RENAMED_ACCOUNTS,
+  feeAccountFor,
 } = await import('../assets/store.js');
-const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances } =
+const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances, unexportedEntries } =
   await import('../assets/transfer.js');
 
 const base = {
@@ -472,4 +473,56 @@ test('이름이 바뀐 계좌는 설정에서 옛 이름을 대체한다', () =>
   // 새 이름을 이미 들고 있으면 둘로 갈라지지 않는다.
   saveSettings({ accounts: ['현금', old, now], seededAccounts: [now] });
   assert.deepEqual(seedAccounts().accounts, ['현금', now]);
+});
+
+test('ATM 수수료는 인출이든 입금이든 은행 쪽에 붙는다', () => {
+  assert.equal(feeAccountFor('로킨', '현금'), '로킨'); // 인출
+  assert.equal(feeAccountFor('현금', '로킨'), '로킨'); // 입금 — 지갑에서 나간 돈이 아니다
+});
+
+test('입금 수수료는 현금으로 내보내지 않는다', () => {
+  const at = Date.parse('2026-09-01T10:00');
+  const rows = [
+    normalise({ ...base, id: 'o', ts: at, account: '현금', amount: 20000, type: 'transfer', direction: 'out', group: 'g', payee: 'ATM', memo: '' }),
+    normalise({ ...base, id: 'i', ts: at, account: '로킨', amount: 20000, type: 'transfer', direction: 'in', group: 'g', payee: 'ATM', memo: '' }),
+    normalise({ ...base, id: 'f', ts: at, account: feeAccountFor('현금', '로킨'), amount: 110, type: 'expense', category: '기타', group: 'g', payee: 'ATM', memo: '수수료' }),
+  ];
+  const lines = toCsv(rows).replace(/^\ufeff/, '').split('\r\n').filter(Boolean);
+  assert.deepEqual(lines.slice(1), ['2026-09-01,현금,-20000,ATM,이체,현금장부,"(짝: 로킨 20,000)",-20000']);
+  assert.deepEqual(unexportedEntries(rows), []);
+});
+
+test('deleted 로 표시된 행은 내보내지 않는다', () => {
+  const rows = [
+    normalise({ ...base, id: 'a', account: '현금', amount: 1000, type: 'expense', category: '식비', memo: '' }),
+    normalise({ ...base, id: 'b', account: '현금', amount: 220, type: 'expense', category: '기타', memo: '수수료', deleted: true }),
+  ];
+  const csv = toCsv(rows);
+  assert.ok(!csv.includes('수수료'));
+  assert.equal(csvFilename(rows).endsWith('_1건.csv'), true);
+});
+
+test('일부러 뺀 것 말고 내보내지 못한 기록을 골라낸다', () => {
+  const at = Date.parse('2026-09-01T10:00');
+  const rows = [
+    // 설계상 빠지는 것: 현금 이체의 은행 쪽 행과 그 수수료
+    normalise({ ...base, id: 'o', ts: at, account: '로킨', amount: 20000, type: 'transfer', direction: 'out', group: 'g1' }),
+    normalise({ ...base, id: 'i', ts: at, account: '현금', amount: 20000, type: 'transfer', direction: 'in', group: 'g1' }),
+    normalise({ ...base, id: 'f', ts: at, account: '로킨', amount: 220, type: 'expense', category: '기타', group: 'g1', memo: '수수료' }),
+    // 빠지면 안 되는데 빠지는 것: 은행 계좌에 적힌 지출, 은행끼리의 이체
+    normalise({ ...base, id: 'x', ts: at, account: '로킨', amount: 1500, type: 'expense', category: '식비' }),
+    normalise({ ...base, id: 'b1', ts: at, account: '로킨', amount: 3000, type: 'transfer', direction: 'out', group: 'g2' }),
+    normalise({ ...base, id: 'b2', ts: at, account: '카드', amount: 3000, type: 'transfer', direction: 'in', group: 'g2' }),
+    // 이미 지워진 것은 대상이 아니다
+    normalise({ ...base, id: 'd', ts: at, account: '로킨', amount: 9, type: 'expense', deleted: true }),
+  ];
+  assert.deepEqual(unexportedEntries(rows).map((r) => r.id).sort(), ['b1', 'b2', 'x']);
+  assert.match(handoffSummary(rows), /제외: 현금이 아닌 계좌의 기록 3건/);
+});
+
+test('지출·수입의 기본 계좌는 내보내는 계좌여야 하고 현금은 빠지지 않는다', () => {
+  saveSettings({ accounts: ['은행', '로킨'], defaultAccount: '로킨' });
+  const settings = loadSettings();
+  assert.equal(settings.defaultAccount, '현금');
+  assert.ok(settings.accounts.includes('현금'));
 });

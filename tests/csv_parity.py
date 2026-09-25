@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-from fetch_firestore import csv_filename, to_csv  # noqa: E402
+from fetch_firestore import csv_filename, to_csv, unexported_entries  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
 
@@ -49,6 +49,9 @@ RECORDS = [
     {"id": "e", "ts": 1757289600000, "account": "현금", "amount": 1735, "type": "expense",
      "direction": "out", "category": "식비", "payee": "세븐일레븐", "memo": '점심, "특선"',
      "source": "현금장부", "deleted": False},
+    {"id": "b", "ts": 1757289600000, "account": "은행", "amount": 800, "type": "expense",
+     "direction": "out", "category": "식비", "payee": "은행에 적힌 지출", "memo": "",
+     "source": "현금장부", "deleted": False},
     {"id": "x", "ts": 1757289600000, "account": "현금", "amount": 999, "type": "expense",
      "direction": "out", "category": "기타", "payee": "삭제됨", "memo": "",
      "source": "현금장부", "deleted": True},
@@ -60,17 +63,19 @@ Promise.all([
   import('%(root)s/assets/transfer.js'),
   import('%(root)s/assets/store.js'),
 ]).then(([t, s]) => {
-  const recs = JSON.parse(fs.readFileSync('%(fixture)s', 'utf8'))
-    .filter((r) => !r.deleted)
-    .map(s.normalise);
+  // Unfiltered: dropping deleted rows is the exporters' job, and part of what
+  // this compares.
+  const recs = JSON.parse(fs.readFileSync('%(fixture)s', 'utf8')).map(s.normalise);
   fs.writeFileSync('%(out)s', t.toCsv(recs));
-  process.stdout.write(t.csvFilename(recs));
+  process.stdout.write(JSON.stringify({
+    name: t.csvFilename(recs),
+    left: t.unexportedEntries(recs).map((r) => r.id).sort(),
+  }));
 });
 """
 
 
 def main() -> int:
-    live = [r for r in RECORDS if not r["deleted"]]
 
     with tempfile.TemporaryDirectory() as tmp:
         fixture = Path(tmp) / "fixture.json"
@@ -90,10 +95,11 @@ def main() -> int:
             return 1
 
         js_bytes = js_out.read_bytes()
-        js_name = result.stdout.strip()
+        js_meta = json.loads(result.stdout)
+        js_name = js_meta["name"]
 
-    py_bytes = to_csv(live, JST).encode("utf-8")
-    py_name = csv_filename(live, JST)
+    py_bytes = to_csv(RECORDS, JST).encode("utf-8")
+    py_name = csv_filename(RECORDS, JST)
 
     ok = True
     if js_bytes != py_bytes:
@@ -105,6 +111,15 @@ def main() -> int:
     if js_name != py_name:
         ok = False
         print(f"파일명이 다릅니다: 앱 {js_name!r} / 스크립트 {py_name!r}")
+
+    # What each side reports as left out, so Cowork's warning matches the app's.
+    py_left = sorted(r["id"] for r in unexported_entries(RECORDS))
+    if js_meta["left"] != py_left:
+        ok = False
+        print(f"제외 목록이 다릅니다: 앱 {js_meta['left']} / 스크립트 {py_left}")
+    if py_left != ["b"]:
+        ok = False
+        print(f"픽스처의 제외 목록이 예상과 다릅니다: {py_left}")
 
     print("CSV parity OK" if ok else "CSV parity FAILED")
     return 0 if ok else 1

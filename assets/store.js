@@ -74,6 +74,42 @@ export const DEFAULT_ACCOUNTS = [
  */
 export const SEEDED_ACCOUNTS = ['와리깡'];
 
+export const CASH = '현금';
+
+/**
+ * The accounts this app is the only record of — and so the only ones that
+ * reach the ledger export.
+ *
+ * 현금 has no statement. 와리깡 is cash that changed hands over a split bill;
+ * nobody else writes it down, and the ledger needs it to take the others'
+ * share back off the card that paid the whole bill. A bank or card account is
+ * left out: its own data already carries its side of every 이체, ATM fees
+ * included, and a second copy would count it twice.
+ *
+ * The entry screen holds to the same set, so nothing can be recorded here that
+ * would then silently fail to leave: a 지출 or 수입 is always on one of these,
+ * and a 이체 must touch at least one.
+ */
+export const EXPORTED_ACCOUNTS = [CASH, '와리깡'];
+
+export function isExported(account) {
+  return EXPORTED_ACCOUNTS.includes(account);
+}
+
+/**
+ * Which side of a 이체 an ATM fee is charged to: the bank, never the cash.
+ *
+ * A withdrawal hands over the full amount and takes the fee from the account;
+ * a deposit credits the account and takes the fee from it too. Either way the
+ * fee never passes through the wallet, so it belongs on the side that is not
+ * cash — the one whose own statement will show it.
+ */
+export function feeAccountFor(from, to) {
+  if (!isExported(from)) return from;
+  if (!isExported(to)) return to;
+  return from;
+}
+
 /**
  * Accounts renamed after they had already reached a device.
  *
@@ -341,6 +377,45 @@ async function hardDelete(ids) {
   emit();
 }
 
+/**
+ * Land an edit: write `rows` and remove `retiredIds`, in one transaction.
+ *
+ * An edit can change a record's shape — a 지출 turned into a 이체, a 이체 turned
+ * into a 지출, a fee cleared — so the rows it replaces are not always the rows
+ * it writes. Whatever was replaced and not rewritten has to go, through the
+ * deletion log like any other delete, or it lingers as a second copy of the
+ * same money.
+ */
+export async function commitEdit(rows, retiredIds = []) {
+  const now = Date.now();
+  const written = rows.map((r) => normalise({ ...r, updatedAt: now }));
+  const keep = new Set(written.map((r) => r.id));
+  const retired = [...new Set(retiredIds)].filter((id) => !keep.has(id));
+
+  await tx('readwrite', (store) => {
+    for (const r of written) store.put(r);
+    for (const id of retired) store.delete(id);
+  });
+  if (retired.length) recordDeletions(retired, now);
+  emit();
+  return written;
+}
+
+/**
+ * Remove rows stored with `deleted: true`.
+ *
+ * Nothing should write one any more — a delete removes the row outright — but
+ * an earlier version marked a cleared ATM fee that way instead. Nothing reads
+ * the flag, so those rows stayed live in the app and in the export, and sync
+ * pushed them to the cloud without it. Deleting them properly also tombstones
+ * the cloud copy.
+ */
+export async function purgeDeleted() {
+  const stale = (await allRaw()).filter((r) => r.deleted).map((r) => r.id);
+  await hardDelete(stale);
+  return stale.length;
+}
+
 /** Remove rows because the cloud says they are gone — nothing to log. */
 export async function dropLocal(ids) {
   if (!ids.length) return;
@@ -485,9 +560,12 @@ export function loadSettings() {
     if (!Array.isArray(settings.accounts) || !settings.accounts.length) {
       settings.accounts = [...DEFAULT_ACCOUNTS];
     }
-    if (!settings.accounts.includes(settings.defaultAccount)) {
-      settings.defaultAccount = settings.accounts[0];
+    // 지출·수입 start on this account, so it has to be one that is exported.
+    if (!settings.accounts.includes(settings.defaultAccount) || !isExported(settings.defaultAccount)) {
+      settings.defaultAccount = CASH;
     }
+    // 현금 is what this ledger is for; an account list without it cannot record anything.
+    if (!settings.accounts.includes(CASH)) settings.accounts = [CASH, ...settings.accounts];
     for (const key of ['transferFrom', 'transferTo']) {
       if (!settings.accounts.includes(settings[key])) settings[key] = '';
     }

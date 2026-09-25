@@ -1,6 +1,14 @@
 // CSV / JSON export and import.
 
-import { contentId, directionFromRow, normalise, signedAmount, typeFromRow } from './store.js';
+import {
+  CASH,
+  contentId,
+  directionFromRow,
+  isExported,
+  normalise,
+  signedAmount,
+  typeFromRow,
+} from './store.js';
 
 // A:G are exactly the 거래내역 columns of the 일본 자산 관리 workbook, in order, so
 // the file drops into archive/ as a source original and build_ledger.py reads it
@@ -27,19 +35,6 @@ function escapeCell(value) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-const CASH = '현금';
-
-/**
- * The accounts this app is the only record of, and so the only ones it exports.
- *
- * 현금 has no statement. 와리깡 is cash that changed hands over a split bill —
- * nobody else writes it down, and the ledger needs it to take the other
- * people's share back off the card that paid the whole bill. A bank or card
- * account is left out: its own data already carries its side of every 이체,
- * ATM fees included, and a second copy here would count it twice.
- */
-const EXPORTED_ACCOUNTS = new Set([CASH, '와리깡']);
-
 /**
  * `(짝: 로킨 -17,000)` — where a 이체's cash came from or went, in the form the
  * workbook's own cash-side 이체 rows already use in 비고.
@@ -50,33 +45,49 @@ const EXPORTED_ACCOUNTS = new Set([CASH, '와리깡']);
 function counterpartNote(record, halves) {
   if (record.type !== 'transfer' || !record.group) return '';
   const other = (halves.get(record.group) || []).find((r) => r.direction !== record.direction);
-  if (!other || EXPORTED_ACCOUNTS.has(other.account)) return '';
+  if (!other || isExported(other.account)) return '';
   return `(짝: ${other.account} ${signedAmount(other).toLocaleString('en-US')})`;
 }
 
 /**
  * What goes into the ledger, oldest first, deterministic so md5 dedupe works.
  *
- * This app records cash flow, so only EXPORTED_ACCOUNTS leave it. When a 이체's
- * other half stays behind — the bank an ATM withdrawal came out of — the row
- * that does go out names it in 비고 instead; matching it against the bank's own
- * data is the ledger's job.
+ * This app records cash flow, so only EXPORTED_ACCOUNTS (store.js) leave it.
+ * When a 이체's other half stays behind — the bank an ATM withdrawal came out of
+ * — the row that does go out names it in 비고 instead; matching it against the
+ * bank's own data is the ledger's job. A row flagged `deleted` is gone, whatever
+ * left it stored.
  */
 function forExport(records) {
+  const live = records.filter((r) => !r.deleted);
   const halves = new Map();
-  for (const r of records) {
+  for (const r of live) {
     if (r.type !== 'transfer' || !r.group) continue;
     if (!halves.has(r.group)) halves.set(r.group, []);
     halves.get(r.group).push(r);
   }
 
-  return records
-    .filter((r) => EXPORTED_ACCOUNTS.has(r.account))
+  return live
+    .filter((r) => isExported(r.account))
     .map((r) => {
       const note = counterpartNote(r, halves);
       return note ? { ...r, memo: [r.memo, note].filter(Boolean).join(' ') } : r;
     })
     .sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+}
+
+/**
+ * Rows the export leaves out that were not meant to be left out.
+ *
+ * Dropping a bank's half of a cash 이체, or its ATM fee, is by design. Anything
+ * else on an account that is not exported — a 지출 or 수입 on a bank, a 이체
+ * between two banks — would vanish from the ledger without a word. Nothing new
+ * can be entered that way; this is what surfaces older rows that were.
+ */
+export function unexportedEntries(records) {
+  const live = records.filter((r) => !r.deleted);
+  const cashGroups = new Set(live.filter((r) => r.group && isExported(r.account)).map((r) => r.group));
+  return live.filter((r) => !isExported(r.account) && !(r.group && cashGroups.has(r.group)));
 }
 
 export function toCsv(records) {
@@ -137,6 +148,7 @@ export function csvFilename(records) {
  */
 export function handoffSummary(records) {
   const sorted = forExport(records);
+  const left = unexportedEntries(records);
   const sum = (type) =>
     sorted.filter((r) => r.type === type).reduce((total, r) => total + r.amount, 0);
   const count = (type) => sorted.filter((r) => r.type === type).length;
@@ -166,6 +178,9 @@ export function handoffSummary(records) {
     `- 현금 이체: 유입 ${yen(moved(1))} / 유출 ${yen(moved(-1))} (수입·지출 집계 제외)`,
     `- 계좌: ${accounts}`,
     `- 출처: ${sources}`,
+    ...(left.length
+      ? [`- **제외: 현금이 아닌 계좌의 기록 ${left.length}건** — 앱에서 계좌를 고쳐 다시 내보내야 합니다`]
+      : []),
     '',
     '### 기록상 최종 잔액',
     '',

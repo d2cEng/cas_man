@@ -1,8 +1,13 @@
 // UI controller.
 
 import {
+  CASH,
+  commitEdit,
   CURRENCIES,
   DEFAULT_ACCOUNTS,
+  feeAccountFor,
+  isExported,
+  purgeDeleted,
   DEFAULT_CATEGORIES,
   TYPES,
   get,
@@ -39,6 +44,7 @@ import {
   formatDate,
   formatTime,
   handoffSummary,
+  unexportedEntries,
   parseImport,
   toCsv,
   toJson,
@@ -65,6 +71,9 @@ const state = {
   counterAccount: '',
   editingId: null,
   editingGroup: null,
+  // The account an older 지출·수입 was saved on, when it is no longer offered;
+  // kept on screen for that one edit instead of being swapped out unseen.
+  editingKeeps: null,
   month: startOfMonth(new Date()),
   query: '',
   records: [],
@@ -141,7 +150,7 @@ function renderTypeToggle() {
   renderAmount();
 }
 
-function fillAccountSelect(select, chosen, placeholder) {
+function fillAccountSelect(select, chosen, placeholder, allowed = state.settings.accounts) {
   select.textContent = '';
   if (placeholder) {
     const option = document.createElement('option');
@@ -149,20 +158,40 @@ function fillAccountSelect(select, chosen, placeholder) {
     option.textContent = placeholder;
     select.appendChild(option);
   }
-  for (const name of state.settings.accounts) {
+  for (const name of allowed) {
     const option = document.createElement('option');
     option.value = name;
     option.textContent = name;
     select.appendChild(option);
   }
-  select.value = state.settings.accounts.includes(chosen) ? chosen : placeholder ? '' : state.settings.accounts[0];
+  select.value = allowed.includes(chosen) ? chosen : placeholder ? '' : allowed[0];
   return select.value;
 }
 
+/**
+ * Accounts a 지출 or 수입 may be recorded on: only the exported ones.
+ *
+ * This app records cash flow, and the export carries nothing else, so a 지출
+ * on a bank account would show in the app and then quietly never reach the
+ * ledger. A 이체 may name any account on its other side.
+ */
+function cashAccounts() {
+  return state.settings.accounts.filter(isExported);
+}
+
 function renderAccounts() {
+  let allowed = state.type === 'transfer' ? state.settings.accounts : cashAccounts();
+  // An older row opened for editing keeps showing the account it was saved on,
+  // even one no longer offered — replacing it silently would move the money.
+  // saveEntry then refuses it until another is picked.
+  if (state.editingKeeps && !allowed.includes(state.editingKeeps)) {
+    allowed = [...allowed, state.editingKeeps];
+  }
   state.account = fillAccountSelect(
     $('field-account'),
     state.account || state.settings.defaultAccount,
+    undefined,
+    allowed,
   );
   state.counterAccount = fillAccountSelect(
     $('field-counter-account'),
@@ -207,6 +236,7 @@ function resetEntry() {
   state.amount = 0;
   state.editingId = null;
   state.editingGroup = null;
+  state.editingKeeps = null;
   $('field-fee').value = '';
   applyAccountDefaults();
   $('field-payee').value = '';
@@ -229,6 +259,12 @@ function pressKey(key) {
   renderAmount();
 }
 
+/** Ids of the rows the form was opened on — everything an edit replaces. */
+function replacedIds() {
+  if (state.editingGroup) return state.editingGroup.map((r) => r.id);
+  return state.editingId ? [state.editingId] : [];
+}
+
 async function saveEntry() {
   if (state.amount <= 0) return;
 
@@ -246,12 +282,25 @@ async function saveEntry() {
     return;
   }
 
-  await put({
-    ...common,
-    id: state.editingId || newId(),
-    account: $('field-account').value,
-    category: TYPES[state.type].category || state.category,
-  });
+  const account = $('field-account').value;
+  if (!isExported(account)) {
+    toast(`${account} 은(는) 현금이 아니라 내보내지 않습니다. 계좌를 다시 고르세요`, 'warn');
+    return;
+  }
+
+  // Editing a 이체 into a 지출 replaces the whole pair and its fee, not just
+  // the row that was tapped; commitEdit removes whatever is not rewritten.
+  await commitEdit(
+    [
+      {
+        ...common,
+        id: state.editingId || newId(),
+        account,
+        category: TYPES[state.type].category || state.category,
+      },
+    ],
+    replacedIds(),
+  );
   toast(state.editingId ? '수정했습니다' : `${money(common.amount)} 기록`, 'ok');
   resetEntry();
   backgroundSync();
@@ -275,6 +324,11 @@ async function saveTransfer(common) {
     toast('보내는 계좌와 받는 계좌가 같습니다', 'warn');
     return;
   }
+  // Neither side would be exported, so the ledger would never see it.
+  if (!isExported(from) && !isExported(to)) {
+    toast('현금이 오가지 않는 이체는 이 장부에 기록하지 않습니다', 'warn');
+    return;
+  }
 
   const existing = state.editingGroup || [];
   const group = existing[0]?.group || newGroupId();
@@ -282,8 +336,11 @@ async function saveTransfer(common) {
     existing.find((r) => r.type === 'transfer' && r.direction === direction);
   const existingFee = existing.find((r) => r.type === 'expense');
 
+  // Editing a single row into a 이체 carries its id over to the outgoing half.
+  const reused = state.editingGroup ? null : state.editingId;
+
   const rows = [
-    { ...common, id: half('out')?.id || newId(), account: from, category: '이체', group, direction: 'out' },
+    { ...common, id: half('out')?.id || reused || newId(), account: from, category: '이체', group, direction: 'out' },
     { ...common, id: half('in')?.id || newId(), account: to, category: '이체', group, direction: 'in' },
   ];
 
@@ -292,8 +349,7 @@ async function saveTransfer(common) {
     rows.push({
       ...common,
       id: existingFee?.id || newId(),
-      // The fee is charged on the account the money left.
-      account: from,
+      account: feeAccountFor(from, to),
       amount: fee,
       type: 'expense',
       category: state.settings.feeCategory,
@@ -301,12 +357,11 @@ async function saveTransfer(common) {
       memo: [common.memo, '수수료'].filter(Boolean).join(' '),
       group,
     });
-  } else if (existingFee) {
-    // The fee was cleared while editing — drop it rather than orphan it.
-    rows.push({ ...existingFee, deleted: true });
   }
 
-  await putMany(rows.map((r) => ({ ...r, updatedAt: Date.now() })));
+  // A fee cleared while editing, or a row that stopped being part of this
+  // 이체, is among the replaced ids and not rewritten, so it is removed.
+  await commitEdit(rows, replacedIds());
 
   const note = fee > 0 ? ` (수수료 ${money(fee)} 별도 기록)` : '';
   toast(
@@ -343,6 +398,7 @@ async function editRecord(record) {
   state.amount = record.amount;
   state.category = record.category;
   state.account = record.account;
+  state.editingKeeps = record.type !== 'transfer' && !isExported(record.account) ? record.account : null;
 
   renderAccounts();
   $('field-payee').value = record.payee;
@@ -380,7 +436,7 @@ function counterpartOf(record) {
 }
 
 /**
- * Sign for a listed row, read from the home 계좌 (현금 by default).
+ * Sign for a listed row, read from the 현금 side.
  *
  * A 이체 is + when money lands in 현금 and − when it leaves; one that never
  * touches 현금 is shown unsigned. The list carries only the outgoing half of a
@@ -390,7 +446,7 @@ function counterpartOf(record) {
 function displaySign(record, counterpart) {
   if (record.type === 'income') return '+';
   if (record.type !== 'transfer') return '-';
-  const home = state.settings.defaultAccount;
+  const home = CASH;
   if (counterpart === home) return '+';
   if (record.account === home) return record.direction === 'in' ? '+' : '-';
   return '';
@@ -413,7 +469,7 @@ function renderBalances() {
   // This app records cash flow only. The other side of a 이체 — 은행, 와리깡 —
   // is where the cash came from or went, not an account kept here, so its
   // running total would be half a story. Only the cash balance is shown.
-  const home = state.settings.defaultAccount;
+  const home = CASH;
   const value = state.records
     .filter((record) => record.account === home)
     .reduce((total, record) => total + signedAmount(record), 0);
@@ -558,6 +614,11 @@ function renderAccountEditor() {
     const chip = document.createElement('span');
     chip.className = 'chip chip--static';
     chip.textContent = name;
+    // 현금 is what this ledger records; without it nothing could be entered.
+    if (name === CASH) {
+      host.appendChild(chip);
+      continue;
+    }
 
     const del = document.createElement('button');
     del.type = 'button';
@@ -581,7 +642,7 @@ function renderAccountEditor() {
 }
 
 function renderDefaultAccount() {
-  fillAccountSelect($('setting-default-account'), state.settings.defaultAccount);
+  fillAccountSelect($('setting-default-account'), state.settings.defaultAccount, undefined, cashAccounts());
   fillAccountSelect($('setting-transfer-from'), state.settings.transferFrom, '선택 안 함');
   fillAccountSelect($('setting-transfer-to'), state.settings.transferTo, '선택 안 함');
 }
@@ -667,18 +728,9 @@ function renderWidgetUrl() {
   }
   if (state.settings.categories.includes(chosen)) select.value = chosen;
 
+  // A widget records a 지출 or 수입, so it offers the same accounts the form does.
+  fillAccountSelect($('widget-account'), $('widget-account').value || state.settings.defaultAccount, undefined, cashAccounts());
   const accountSelect = $('widget-account');
-  const chosenAccount = accountSelect.value;
-  accountSelect.textContent = '';
-  for (const name of state.settings.accounts) {
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
-    accountSelect.appendChild(option);
-  }
-  accountSelect.value = state.settings.accounts.includes(chosenAccount)
-    ? chosenAccount
-    : state.settings.defaultAccount;
 
   const params = new URLSearchParams({ add: '1', type: state.type });
   const amount = $('widget-amount').value.trim();
@@ -939,7 +991,13 @@ async function handleLaunchParams() {
   renderCategories();
   showView('entry');
 
-  if (params.get('save') === '1' && state.amount > 0) {
+  // A widget made before only cash accounts were offered can still name a
+  // bank. Saving it would either lose the row or move it to 현금 unasked, so
+  // it waits on the form instead.
+  const offCash = account && !isExported(account);
+  if (offCash) toast(`${account} 은(는) 현금이 아니라 자동 저장하지 않았습니다. 계좌를 확인하세요`, 'warn');
+
+  if (params.get('save') === '1' && state.amount > 0 && !offCash) {
     await saveEntry();
   }
 
@@ -957,7 +1015,22 @@ function wire() {
     button.addEventListener('click', () => {
       state.type = button.dataset.type;
       // Editing keeps the row's own accounts; only a fresh entry gets defaults.
-      if (!state.editingId) applyAccountDefaults();
+      // Either way the choices change with the type — a 지출 cannot stay on the
+      // bank a 이체 came from.
+      if (!state.editingId) {
+        applyAccountDefaults();
+      } else {
+        state.account = $('field-account').value;
+        state.counterAccount = $('field-counter-account').value;
+        // Switching type is a deliberate change, so an older row's off-cash
+        // account is no longer held on screen. A 이체 turned into a 지출 or
+        // 수입 lands on its cash side — where the money actually moved.
+        state.editingKeeps = null;
+        if (state.type !== 'transfer' && !isExported(state.account)) {
+          state.account = isExported(state.counterAccount) ? state.counterAccount : CASH;
+        }
+        renderAccounts();
+      }
       renderTypeToggle();
     });
   }
@@ -1037,6 +1110,12 @@ function wire() {
       return;
     }
     download(csvFilename(records), toCsv(records), 'text/csv');
+
+    // Said out loud rather than dropped silently: these never reach the ledger.
+    const left = unexportedEntries(records);
+    if (left.length) {
+      toast(`현금이 아닌 계좌의 기록 ${left.length}건은 내보내지 않았습니다. 내역에서 계좌를 확인하세요`, 'warn');
+    }
   });
 
   $('copy-handoff').addEventListener('click', async () => {
@@ -1192,6 +1271,9 @@ async function main() {
   // Before the first render, so a newly shipped or renamed account is already
   // right in the selects.
   state.settings = seedAccounts();
+  await purgeDeleted().catch(() => {
+    /* IndexedDB unavailable — nothing stored to clean */
+  });
 
   wire();
   wireInstall();
