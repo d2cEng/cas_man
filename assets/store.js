@@ -78,8 +78,13 @@ export const SEEDED_ACCOUNTS = ['와리깡'];
  * Accounts renamed after they had already reached a device.
  *
  * Changing DEFAULT_ACCOUNTS only affects a fresh install, so a rename has to
- * follow the old name everywhere it landed: the saved 계좌 목록, the settings
- * that point at an account by name, and any record already filed under it.
+ * follow the old name into the saved 계좌 목록 and into the settings that point
+ * at an account by name.
+ *
+ * Records are deliberately not rewritten. Nothing had been entered when 뿜빠이
+ * was renamed, and a rename that has to chase stored rows — bumping updatedAt
+ * so it wins the sync merge — is worth writing only when there are rows to
+ * chase. Renaming an account people have used needs that step added back.
  */
 export const RENAMED_ACCOUNTS = { 뿜빠이: '와리깡' };
 
@@ -548,21 +553,6 @@ export function seedAccounts() {
   }
 
   return Object.keys(patch).length ? saveSettings(patch) : settings;
-}
-
-/**
- * Move any record filed under a renamed account onto the new name.
- *
- * `updatedAt` is bumped so the change wins the merge and reaches the other
- * devices; without it the rows would come straight back on the next sync.
- */
-export async function renameStoredAccounts() {
-  const stale = (await allRaw()).filter((r) => RENAMED_ACCOUNTS[r.account]);
-  if (!stale.length) return 0;
-
-  const now = Date.now();
-  await putMany(stale.map((r) => ({ ...r, account: RENAMED_ACCOUNTS[r.account], updatedAt: now })));
-  return stale.length;
 }
 
 // ── Change notification ───────────────────────────────────────────────────
