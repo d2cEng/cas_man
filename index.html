@@ -262,9 +262,9 @@
           <summary class="card__title">내보내기 / 가져오기</summary>
           <p class="card__note">
             <strong>거래내역 CSV</strong> — A~G열이 워크북 「거래내역」 시트와 같은 순서라 그대로
-            붙습니다. <strong>현금 행만</strong> 담기며, 이체는 비고에 <code>(짝: 로킨 -17,000)</code>
-            처럼 어디서 왔는지가 적힙니다. H열 <code>잔액</code> 은 현금 누계로, 지갑과 대조하라고
-            붙인 파생값입니다. 파일명에 기간·건수가 들어가 <code>archive/</code> 에 그냥 쌓아도 됩니다.
+            붙습니다. <strong>현금과 와리깡 행만</strong> 담기며, 은행에서 온 이체는 비고에
+            <code>(짝: 로킨 -17,000)</code> 처럼 어디서 왔는지가 적힙니다. H열 <code>잔액</code> 은
+            계좌별 누계로, 현금은 지갑과 대조하라고 붙인 파생값입니다. 파일명에 기간·건수가 들어가 <code>archive/</code> 에 그냥 쌓아도 됩니다.
           </p>
           <div class="row">
             <button class="btn btn--primary" id="export-csv" type="button">거래내역 CSV</button>

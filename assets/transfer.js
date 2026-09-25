@@ -27,29 +27,40 @@ function escapeCell(value) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-// The ledger's cash account. Only its rows are exported.
 const CASH = '현금';
+
+/**
+ * The accounts this app is the only record of, and so the only ones it exports.
+ *
+ * 현금 has no statement. 와리깡 is cash that changed hands over a split bill —
+ * nobody else writes it down, and the ledger needs it to take the other
+ * people's share back off the card that paid the whole bill. A bank or card
+ * account is left out: its own data already carries its side of every 이체,
+ * ATM fees included, and a second copy here would count it twice.
+ */
+const EXPORTED_ACCOUNTS = new Set([CASH, '와리깡']);
 
 /**
  * `(짝: 로킨 -17,000)` — where a 이체's cash came from or went, in the form the
  * workbook's own cash-side 이체 rows already use in 비고.
+ *
+ * Only needed when the other half is not in the file; a 현금 ↔ 와리깡 이체
+ * goes out as both of its rows, which name each other already.
  */
 function counterpartNote(record, halves) {
   if (record.type !== 'transfer' || !record.group) return '';
   const other = (halves.get(record.group) || []).find((r) => r.direction !== record.direction);
-  if (!other) return '';
+  if (!other || EXPORTED_ACCOUNTS.has(other.account)) return '';
   return `(짝: ${other.account} ${signedAmount(other).toLocaleString('en-US')})`;
 }
 
 /**
- * What goes into the ledger: cash rows only, oldest first, deterministic so md5
- * dedupe works.
+ * What goes into the ledger, oldest first, deterministic so md5 dedupe works.
  *
- * This app records cash flow. The other side of a 이체 — the bank an ATM
- * withdrawal came out of, the 와리깡 a friend repaid — is named on the cash row
- * rather than written as a row of its own: the bank's own data already carries
- * the bank side, and matching the two is the ledger's job, not this app's. An
- * ATM fee is charged to the bank, so it stays out for the same reason.
+ * This app records cash flow, so only EXPORTED_ACCOUNTS leave it. When a 이체's
+ * other half stays behind — the bank an ATM withdrawal came out of — the row
+ * that does go out names it in 비고 instead; matching it against the bank's own
+ * data is the ledger's job.
  */
 function forExport(records) {
   const halves = new Map();
@@ -60,7 +71,7 @@ function forExport(records) {
   }
 
   return records
-    .filter((r) => r.account === CASH)
+    .filter((r) => EXPORTED_ACCOUNTS.has(r.account))
     .map((r) => {
       const note = counterpartNote(r, halves);
       return note ? { ...r, memo: [r.memo, note].filter(Boolean).join(' ') } : r;
@@ -71,9 +82,9 @@ function forExport(records) {
 export function toCsv(records) {
   const rows = [COLUMNS.join(',')];
 
-  // Running cash balance, in the order the rows are written — the number to hold
-  // against the wallet. It only means anything while that order holds, which is
-  // why the export is always sorted.
+  // Running balance per 계좌, in the order the rows are written; the 현금 one is
+  // the number to hold against the wallet. It only means anything while that
+  // order holds, which is why the export is always sorted.
   const running = new Map();
 
   for (const r of forExport(records)) {
@@ -129,9 +140,11 @@ export function handoffSummary(records) {
   const sum = (type) =>
     sorted.filter((r) => r.type === type).reduce((total, r) => total + r.amount, 0);
   const count = (type) => sorted.filter((r) => r.type === type).length;
+  // Cash in and out by 이체. Read off the 현금 rows alone, or a 와리깡 pair would
+  // show up on both sides.
   const moved = (sign) =>
     sorted
-      .filter((r) => r.type === 'transfer' && Math.sign(signedAmount(r)) === sign)
+      .filter((r) => r.account === CASH && r.type === 'transfer' && Math.sign(signedAmount(r)) === sign)
       .reduce((total, r) => total + r.amount, 0);
   const yen = (n) => n.toLocaleString('ko-KR');
 
@@ -150,7 +163,7 @@ export function handoffSummary(records) {
     `- 건수: ${sorted.length}건 (지출 ${count('expense')} / 수입 ${count('income')} / 이체 ${count('transfer')})`,
     `- 지출 합계: ${yen(sum('expense'))}`,
     `- 수입 합계: ${yen(sum('income'))}`,
-    `- 이체: 유입 ${yen(moved(1))} / 유출 ${yen(moved(-1))} (수입·지출 집계 제외)`,
+    `- 현금 이체: 유입 ${yen(moved(1))} / 유출 ${yen(moved(-1))} (수입·지출 집계 제외)`,
     `- 계좌: ${accounts}`,
     `- 출처: ${sources}`,
     '',
@@ -159,10 +172,11 @@ export function handoffSummary(records) {
     ...closingBalances(sorted).map(([account, value]) => `- ${account}: ${yen(value)}`),
     '',
     'A~G열은 거래내역 시트와 동일(`날짜,계좌,금액,거래처,범주,출처,비고`), 날짜 오름차순.',
-    '**현금 계좌 행만** 담습니다. 이체의 상대 계좌는 비고의 `(짝: 계좌 금액)` 에 있고, 그 행은',
-    '포함하지 않습니다 — 은행 쪽은 은행 데이터에서 오며, 대조와 날짜 보정은 원장에서 합니다.',
-    'H열 `잔액` 은 현금 누계(파생값)이므로 정렬을 바꾸면 의미가 깨집니다 — 지갑 대조용입니다.',
-    '금액은 현금 기준: 들어오면 양수, 나가면 음수. archive/ 에 넣고 _MANIFEST.csv 에 md5 등록하세요.',
+    '**현금과 와리깡 행만** 담습니다. 은행·카드 쪽 행은 그쪽 데이터에 있으므로 빠지고, 그 이체의',
+    '현금 행 비고에 `(짝: 계좌 금액)` 으로 적힙니다. 대조와 날짜 보정은 원장에서 합니다.',
+    '와리깡 행은 카드로 전액 결제한 건에서 남의 몫을 덜어낼 때 씁니다.',
+    'H열 `잔액` 은 계좌별 누계(파생값)이므로 정렬을 바꾸면 의미가 깨집니다 — 현금은 지갑 대조용입니다.',
+    '금액은 지출 음수 / 수입 양수, 이체는 나가는 행 음수 · 받는 행 양수. archive/ 에 넣고 _MANIFEST.csv 에 md5 등록하세요.',
   ].join('\n');
 }
 

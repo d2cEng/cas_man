@@ -30,8 +30,13 @@ DEFAULT_TZ = timezone(timedelta(hours=9))  # Asia/Tokyo
 
 COLUMNS = ["날짜", "계좌", "금액", "거래처", "범주", "출처", "비고", "잔액"]
 
-# The ledger's cash account. Only its rows are exported.
 CASH = "현금"
+
+# The accounts this app is the only record of — EXPORTED_ACCOUNTS in transfer.js.
+# 와리깡 is cash that changed hands over a split bill; the ledger needs it to take
+# the others' share back off the card that paid. Bank and card accounts carry
+# their own side of every 이체 in their own data, so they are left out.
+EXPORTED_ACCOUNTS = {CASH, "와리깡"}
 
 SIGN = {"expense": -1, "income": 1}
 
@@ -53,11 +58,10 @@ def escape_cell(value) -> str:
 
 
 def for_export(records: list[dict]) -> list[dict]:
-    """Cash rows only, 이체 counterpart noted in 비고 — forExport() in transfer.js.
+    """EXPORTED_ACCOUNTS rows, oldest first — forExport() in transfer.js.
 
-    This app records cash flow. The bank side of an ATM withdrawal comes from the
-    bank's own data, and the fee is charged to the bank, so neither is a row here;
-    the cash row names where its money came from instead.
+    When a 이체's other half stays behind (the bank an ATM withdrawal came out
+    of), the row that goes out names it in 비고 instead.
     """
     halves: dict[str, list[dict]] = {}
     for record in records:
@@ -66,7 +70,7 @@ def for_export(records: list[dict]) -> list[dict]:
 
     exported = []
     for record in records:
-        if record.get("account") != CASH:
+        if record.get("account") not in EXPORTED_ACCOUNTS:
             continue
         note = counterpart_note(record, halves)
         if note:
@@ -78,14 +82,17 @@ def for_export(records: list[dict]) -> list[dict]:
 
 
 def counterpart_note(record: dict, halves: dict[str, list[dict]]) -> str:
-    """`(짝: 로킨 -17,000)`, the form the workbook's cash-side 이체 rows use."""
+    """`(짝: 로킨 -17,000)`, the form the workbook's cash-side 이체 rows use.
+
+    Only when the other half is not exported; a 현금 ↔ 와리깡 pair names itself.
+    """
     if record.get("type") != "transfer" or not record.get("group"):
         return ""
     other = next(
         (r for r in halves.get(record["group"], []) if r.get("direction") != record.get("direction")),
         None,
     )
-    if other is None:
+    if other is None or other.get("account") in EXPORTED_ACCOUNTS:
         return ""
     return f"(짝: {other.get('account', '')} {signed_amount(other):,})"
 
@@ -182,11 +189,16 @@ def main() -> None:
     path.write_text(text, encoding="utf-8", newline="")
 
     digest = hashlib.md5(path.read_bytes()).hexdigest()
-    balance = sum(signed_amount(record) for record in exported)
+    balances: dict[str, int] = {}
+    for record in exported:
+        account = record.get("account", "")
+        balances[account] = balances.get(account, 0) + signed_amount(record)
 
     print(f"{path}  ({len(exported)}건)")
     print(f"md5: {digest}")
-    print(f"기록상 최종 현금 잔액: {balance:,}")
+    print("기록상 최종 잔액:")
+    for account, value in sorted(balances.items(), key=lambda kv: (kv[0] != CASH, kv[0])):
+        print(f"  {account}: {value:,}")
 
 
 if __name__ == "__main__":

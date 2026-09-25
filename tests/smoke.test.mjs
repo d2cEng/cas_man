@@ -92,7 +92,7 @@ test('부호로 이체의 어느 쪽인지 되읽는다', () => {
   assert.equal(directionFromRow(30000), 'in');
 });
 
-test('이체 CSV 왕복 후에도 현금 쪽 방향이 보존된다', () => {
+test('이체 CSV 왕복 후에도 방향이 보존된다', () => {
   const rows = [
     // ATM 인출: 현금으로 들어옴
     normalise({ ...base, id: 'o1', type: 'transfer', direction: 'out', account: '은행', amount: 30000, payee: 'ATM', memo: '', group: 'g1' }),
@@ -103,11 +103,14 @@ test('이체 CSV 왕복 후에도 현금 쪽 방향이 보존된다', () => {
   ];
   const parsed = parseImport(toCsv(rows), 'ledger.csv');
 
-  // 현금 쪽 두 행만 돌아오고, 부호가 방향을 그대로 들고 온다.
-  assert.deepEqual(parsed.map((r) => r.account), ['현금', '현금']);
+  // 은행 행은 빠지고, 현금·와리깡 행은 부호가 방향을 그대로 들고 온다.
   assert.deepEqual(
-    parsed.map((r) => [r.direction, signedAmount(r)]).sort(),
-    [['in', 30000], ['out', -4500]].sort(),
+    parsed.map((r) => [r.account, r.direction, signedAmount(r)]).sort(),
+    [
+      ['현금', 'in', 30000],
+      ['현금', 'out', -4500],
+      ['와리깡', 'in', 4500],
+    ].sort(),
   );
 });
 
@@ -267,34 +270,57 @@ test('기록상 최종 잔액은 현금 하나다', () => {
   assert.deepEqual(closingBalances(rows), [['현금', 28265]]);
 });
 
-test('와리깡은 현금이 오간 것만 남고 지출은 내 몫만 잡힌다', () => {
+test('와리깡은 두 행 모두 내보내고 지출은 내 몫만 잡힌다', () => {
+  const at = (d) => Date.parse(d);
   // 6,000 을 현금으로 계산했고 그중 4,500 은 남의 몫이다.
   const paid = [
-    normalise({ ...base, id: 'm', ts: Date.parse('2026-03-04T19:00'), account: '현금', amount: 1500, type: 'expense', category: '식비', memo: '' }),
-    normalise({ ...base, id: 'o', ts: Date.parse('2026-03-04T19:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'out', group: 'g1', memo: '' }),
-    normalise({ ...base, id: 'i', ts: Date.parse('2026-03-04T19:00'), account: '와리깡', amount: 4500, type: 'transfer', direction: 'in', group: 'g1', memo: '' }),
+    normalise({ ...base, id: 'm', ts: at('2026-03-04T19:00'), account: '현금', amount: 1500, type: 'expense', category: '식비', memo: '' }),
+    normalise({ ...base, id: 'o', ts: at('2026-03-04T19:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'out', group: 'g1', memo: '' }),
+    normalise({ ...base, id: 'i', ts: at('2026-03-04T19:00'), account: '와리깡', amount: 4500, type: 'transfer', direction: 'in', group: 'g1', memo: '' }),
   ];
 
   // 지갑에서는 6,000 이 빠지지만 지출로 잡히는 건 내 몫 1,500 뿐이다.
-  assert.deepEqual(closingBalances(paid), [['현금', -6000]]);
+  assert.deepEqual(closingBalances(paid), [
+    ['현금', -6000],
+    ['와리깡', 4500],
+  ]);
   assert.match(handoffSummary(paid), /지출 합계: 1,500/);
-  assert.match(handoffSummary(paid), /이체: 유입 0 \/ 유출 4,500/);
+  // 와리깡 쌍이 유입·유출 양쪽에 잡히지 않도록 현금 행만 센다.
+  assert.match(handoffSummary(paid), /현금 이체: 유입 0 \/ 유출 4,500/);
 
-  // 돌려받은 현금은 와리깡에서 들어온 것으로 적힌다. 와리깡 쪽 행은 나가지 않는다.
+  // 돌려받으면 와리깡은 0 으로 닫힌다.
   const repaid = [
     ...paid,
-    normalise({ ...base, id: 'r', ts: Date.parse('2026-03-06T12:00'), account: '와리깡', amount: 4500, type: 'transfer', direction: 'out', group: 'g2', memo: '' }),
-    normalise({ ...base, id: 'c', ts: Date.parse('2026-03-06T12:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'in', group: 'g2', memo: '' }),
+    normalise({ ...base, id: 'r', ts: at('2026-03-06T12:00'), account: '와리깡', amount: 4500, type: 'transfer', direction: 'out', group: 'g2', memo: '' }),
+    normalise({ ...base, id: 'c', ts: at('2026-03-06T12:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'in', group: 'g2', memo: '' }),
   ];
-  assert.deepEqual(closingBalances(repaid), [['현금', -1500]]);
-  const csv = toCsv(repaid);
-  assert.ok(!csv.includes(',와리깡,'), '와리깡 계좌 행은 내보내지 않는다');
-  assert.ok(csv.includes('(짝: 와리깡 -4,500)'), '받은 현금에 출처가 적힌다');
-  assert.ok(csv.includes('(짝: 와리깡 4,500)'), '낸 현금에 행선지가 적힌다');
+  assert.deepEqual(closingBalances(repaid), [
+    ['현금', -1500],
+    ['와리깡', 0],
+  ]);
 
-  // 앱 안에서는 쌍으로 저장되므로 양쪽이 상쇄된다.
-  const net = repaid.filter((r) => r.type === 'transfer').reduce((t, r) => t + signedAmount(r), 0);
-  assert.equal(net, 0);
+  // 와리깡 행이 현금 행과 짝으로 나가고, 서로를 이미 가리키므로 (짝: …) 표기는 붙지 않는다.
+  const csv = toCsv(repaid);
+  assert.equal(csv.split(',와리깡,').length - 1, 2);
+  assert.ok(!csv.includes('(짝:'));
+
+  // 내보낸 이체는 쌍의 합이 0 이라 계좌 오라클이 유지된다.
+  const exported = parseImport(csv, 'ledger.csv').filter((r) => r.type === 'transfer');
+  assert.equal(exported.reduce((t, r) => t + signedAmount(r), 0), 0);
+});
+
+test('카드로 전액 내고 현금으로 돌려받은 와리깡도 원장으로 나간다', () => {
+  // 카드 쪽은 카드 데이터에 있다. 이 앱에는 받은 현금만 들어온다.
+  const rows = [
+    normalise({ ...base, id: 'w', ts: Date.parse('2026-09-25T20:00'), account: '와리깡', amount: 6000, type: 'transfer', direction: 'out', group: 'g', payee: 'KULULU', memo: '丸池' }),
+    normalise({ ...base, id: 'c', ts: Date.parse('2026-09-25T20:00'), account: '현금', amount: 6000, type: 'transfer', direction: 'in', group: 'g', payee: 'KULULU', memo: '丸池' }),
+  ];
+  const lines = toCsv(rows).replace(/^\ufeff/, '').split('\r\n').filter(Boolean);
+  // id 순: c(현금) → w(와리깡). 원장은 와리깡 -6,000 으로 카드 결제에서 남의 몫을 덜어낸다.
+  assert.deepEqual(lines.slice(1), [
+    '2026-09-25,현금,6000,KULULU,이체,현금장부,丸池,6000',
+    '2026-09-25,와리깡,-6000,KULULU,이체,현금장부,丸池,-6000',
+  ]);
 });
 
 test('잔액 열이 있어도 가져오기는 그대로 동작한다', () => {
