@@ -30,6 +30,9 @@ DEFAULT_TZ = timezone(timedelta(hours=9))  # Asia/Tokyo
 
 COLUMNS = ["날짜", "계좌", "금액", "거래처", "범주", "출처", "비고", "잔액"]
 
+# The ledger's cash account. Only its rows are exported.
+CASH = "현금"
+
 SIGN = {"expense": -1, "income": 1}
 
 
@@ -49,12 +52,50 @@ def escape_cell(value) -> str:
     return text
 
 
+def for_export(records: list[dict]) -> list[dict]:
+    """Cash rows only, 이체 counterpart noted in 비고 — forExport() in transfer.js.
+
+    This app records cash flow. The bank side of an ATM withdrawal comes from the
+    bank's own data, and the fee is charged to the bank, so neither is a row here;
+    the cash row names where its money came from instead.
+    """
+    halves: dict[str, list[dict]] = {}
+    for record in records:
+        if record.get("type") == "transfer" and record.get("group"):
+            halves.setdefault(record["group"], []).append(record)
+
+    exported = []
+    for record in records:
+        if record.get("account") != CASH:
+            continue
+        note = counterpart_note(record, halves)
+        if note:
+            memo = record.get("memo") or ""
+            record = {**record, "memo": f"{memo} {note}" if memo else note}
+        exported.append(record)
+
+    return sorted(exported, key=lambda r: (r["ts"], r["id"]))
+
+
+def counterpart_note(record: dict, halves: dict[str, list[dict]]) -> str:
+    """`(짝: 로킨 -17,000)`, the form the workbook's cash-side 이체 rows use."""
+    if record.get("type") != "transfer" or not record.get("group"):
+        return ""
+    other = next(
+        (r for r in halves.get(record["group"], []) if r.get("direction") != record.get("direction")),
+        None,
+    )
+    if other is None:
+        return ""
+    return f"(짝: {other.get('account', '')} {signed_amount(other):,})"
+
+
 def to_csv(records: list[dict], tz: timezone) -> str:
     """Byte-for-byte the same shape as toCsv() in assets/transfer.js."""
     rows = [",".join(COLUMNS)]
     running: dict[str, int] = {}
 
-    for record in sorted(records, key=lambda r: (r["ts"], r["id"])):
+    for record in for_export(records):
         account = record.get("account", "")
         balance = running.get(account, 0) + signed_amount(record)
         running[account] = balance
@@ -81,11 +122,11 @@ def to_csv(records: list[dict], tz: timezone) -> str:
 
 
 def csv_filename(records: list[dict], tz: timezone) -> str:
-    if not records:
+    ordered = for_export(records)
+    if not ordered:
         return "현금장부_빈장부.csv"
-    ordered = sorted(records, key=lambda r: (r["ts"], r["id"]))
     day = lambda r: datetime.fromtimestamp(r["ts"] / 1000, tz).strftime("%Y%m%d")
-    return f"현금장부_{day(ordered[0])}-{day(ordered[-1])}_{len(records)}건.csv"
+    return f"현금장부_{day(ordered[0])}-{day(ordered[-1])}_{len(ordered)}건.csv"
 
 
 def fetch(key_path: Path, uid: str | None) -> list[dict]:
@@ -130,7 +171,8 @@ def main() -> None:
     tz = timezone(timedelta(hours=args.tz))
     records = fetch(args.key, args.uid)
 
-    if not records:
+    exported = for_export(records)
+    if not exported:
         print("기록이 없습니다.")
         return
 
@@ -140,16 +182,11 @@ def main() -> None:
     path.write_text(text, encoding="utf-8", newline="")
 
     digest = hashlib.md5(path.read_bytes()).hexdigest()
-    balances: dict[str, int] = {}
-    for record in records:
-        account = record.get("account", "")
-        balances[account] = balances.get(account, 0) + signed_amount(record)
+    balance = sum(signed_amount(record) for record in exported)
 
-    print(f"{path}  ({len(records)}건)")
+    print(f"{path}  ({len(exported)}건)")
     print(f"md5: {digest}")
-    print("기록상 최종 잔액:")
-    for account, value in sorted(balances.items(), key=lambda kv: (kv[0] != "현금", kv[0])):
-        print(f"  {account}: {value:,}")
+    print(f"기록상 최종 현금 잔액: {balance:,}")
 
 
 if __name__ == "__main__":

@@ -23,21 +23,29 @@ from fetch_firestore import csv_filename, to_csv  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
 
-# Deliberately awkward: a 이체 pair, a fee, a tombstone, a comma and quotes in
-# 비고, two rows sharing a timestamp, and an opening balance.
+# Deliberately awkward: a 이체 pair with its fee (the bank rows must drop out
+# and the cash row must name the bank), a 와리깡 pair going the other way with a
+# 비고 already set, a tombstone, a comma and quotes in 비고, two rows sharing a
+# timestamp, and an opening balance.
 RECORDS = [
     {"id": "o", "ts": 1757116800000, "account": "현금", "amount": 50000, "type": "income",
      "direction": "out", "category": "수입", "payee": "잔고신고", "memo": "잔고",
      "source": "현금장부", "deleted": False},
     {"id": "t1", "ts": 1757203200000, "account": "은행", "amount": 30000, "type": "transfer",
      "direction": "out", "category": "이체", "payee": "ATM", "memo": "",
-     "source": "현금장부", "deleted": False},
+     "source": "현금장부", "group": "g1", "deleted": False},
     {"id": "t2", "ts": 1757203200000, "account": "현금", "amount": 30000, "type": "transfer",
      "direction": "in", "category": "이체", "payee": "ATM", "memo": "",
-     "source": "현금장부", "deleted": False},
+     "source": "현금장부", "group": "g1", "deleted": False},
     {"id": "f", "ts": 1757203260000, "account": "은행", "amount": 220, "type": "expense",
      "direction": "out", "category": "기타", "payee": "ATM", "memo": "수수료",
-     "source": "현금장부", "deleted": False},
+     "source": "현금장부", "group": "g1", "deleted": False},
+    {"id": "w1", "ts": 1757300000000, "account": "현금", "amount": 4500, "type": "transfer",
+     "direction": "out", "category": "이체", "payee": "○○식당", "memo": "丸池",
+     "source": "현금장부", "group": "g2", "deleted": False},
+    {"id": "w2", "ts": 1757300000000, "account": "와리깡", "amount": 4500, "type": "transfer",
+     "direction": "in", "category": "이체", "payee": "○○식당", "memo": "丸池",
+     "source": "현금장부", "group": "g2", "deleted": False},
     {"id": "e", "ts": 1757289600000, "account": "현금", "amount": 1735, "type": "expense",
      "direction": "out", "category": "식비", "payee": "세븐일레븐", "memo": '점심, "특선"',
      "source": "현금장부", "deleted": False},
