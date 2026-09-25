@@ -56,7 +56,22 @@ export const DEFAULT_ACCOUNTS = [
   '카드3',
   '포인트',
   '포인트2',
+  // Not a real account: the placeholder for money that left the wallet but is
+  // coming back. Paying for a group puts everyone else's share here as a 이체,
+  // so 지출 stays at your own share and this balance is what you are still
+  // owed. It returns to 0 when they pay you.
+  '뿜빠이',
 ];
+
+/**
+ * Accounts added to the defaults after the app was already in use.
+ *
+ * An install that has been used carries its own saved 계좌 목록, so a new entry
+ * in DEFAULT_ACCOUNTS would never reach it. These are added to that list once
+ * each, and the note that it has happened is what keeps a deliberate removal
+ * from being undone on the next launch.
+ */
+export const SEEDED_ACCOUNTS = ['뿜빠이'];
 
 /**
  * 구분 for each transaction type, matching the 범주별 sheet.
@@ -97,6 +112,8 @@ const DEFAULT_SETTINGS = {
   // "deleted elsewhere" from "edited here since". Entries expire after
   // DELETION_TTL_MS so the log never grows without bound.
   deletions: {},
+  // Which of SEEDED_ACCOUNTS this install has already been offered.
+  seededAccounts: [],
   // ATM fees are spending, not part of the 이체 they accompany. The workbook has
   // no 수수료 범주, so they land in 기타 with 수수료 in 비고.
   feeCategory: '기타',
@@ -487,6 +504,23 @@ export function saveSettings(patch) {
     /* private mode — settings just won't stick */
   }
   return next;
+}
+
+/**
+ * Add any account new to the defaults to this install's list, once.
+ *
+ * Call it before the first render; it returns the settings to carry on with.
+ */
+export function seedAccounts() {
+  const settings = loadSettings();
+  const done = Array.isArray(settings.seededAccounts) ? settings.seededAccounts : [];
+  const pending = SEEDED_ACCOUNTS.filter((name) => !done.includes(name));
+  if (!pending.length) return settings;
+
+  return saveSettings({
+    accounts: [...settings.accounts, ...pending.filter((name) => !settings.accounts.includes(name))],
+    seededAccounts: [...done, ...pending],
+  });
 }
 
 // ── Change notification ───────────────────────────────────────────────────

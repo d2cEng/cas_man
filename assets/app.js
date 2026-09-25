@@ -13,6 +13,7 @@ import {
   put,
   remove,
   saveSettings,
+  seedAccounts,
   allRaw,
   newId as newGroupId,
   knownDeletions,
@@ -1183,6 +1184,9 @@ async function refresh() {
 }
 
 async function main() {
+  // Before the first render, so a newly shipped account is in the selects.
+  state.settings = seedAccounts();
+
   wire();
   wireInstall();
   onChange(refresh);

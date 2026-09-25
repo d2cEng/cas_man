@@ -6,8 +6,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-const { mergeRecords, normalise, signedAmount, typeFromRow, directionFromRow, classifyMissing } =
-  await import('../assets/store.js');
+// seedAccounts reads and writes settings, so give the module somewhere to keep
+// them. Node has no localStorage; store.js tolerates its absence by falling
+// back to defaults, which would make the migration untestable.
+const store = new Map();
+globalThis.localStorage = {
+  getItem: (key) => (store.has(key) ? store.get(key) : null),
+  setItem: (key, value) => store.set(key, String(value)),
+  removeItem: (key) => store.delete(key),
+};
+
+const {
+  mergeRecords,
+  normalise,
+  signedAmount,
+  typeFromRow,
+  directionFromRow,
+  classifyMissing,
+  loadSettings,
+  saveSettings,
+  seedAccounts,
+  SEEDED_ACCOUNTS,
+} = await import('../assets/store.js');
 const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances } =
   await import('../assets/transfer.js');
 
@@ -239,6 +259,37 @@ test('기록상 최종 잔액은 현금을 먼저 보여준다', () => {
   ]);
 });
 
+test('뿜빠이는 지출을 내 몫만 남기고 받을 돈을 계좌로 들고 있는다', () => {
+  // 6,000 을 현금으로 계산했고 그중 4,500 은 나중에 돌려받는다.
+  const paid = [
+    normalise({ ...base, id: 'm', ts: Date.parse('2026-03-04T19:00'), account: '현금', amount: 1500, type: 'expense', category: '식비' }),
+    normalise({ ...base, id: 'o', ts: Date.parse('2026-03-04T19:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'out', group: 'g1' }),
+    normalise({ ...base, id: 'i', ts: Date.parse('2026-03-04T19:00'), account: '뿜빠이', amount: 4500, type: 'transfer', direction: 'in', group: 'g1' }),
+  ];
+
+  // 지갑에서는 6,000 이 빠지지만 지출로 잡히는 건 내 몫 1,500 뿐이다.
+  assert.deepEqual(closingBalances(paid), [
+    ['현금', -6000],
+    ['뿜빠이', 4500],
+  ]);
+  assert.match(handoffSummary(paid), /지출 합계: 1,500/);
+
+  // 돌려받으면 뿜빠이는 0 으로 닫히고 지갑만 늘어난다.
+  const repaid = [
+    ...paid,
+    normalise({ ...base, id: 'r', ts: Date.parse('2026-03-06T12:00'), account: '뿜빠이', amount: 4500, type: 'transfer', direction: 'out', group: 'g2' }),
+    normalise({ ...base, id: 'c', ts: Date.parse('2026-03-06T12:00'), account: '현금', amount: 4500, type: 'transfer', direction: 'in', group: 'g2' }),
+  ];
+  assert.deepEqual(closingBalances(repaid), [
+    ['현금', -1500],
+    ['뿜빠이', 0],
+  ]);
+
+  // 이체는 양쪽이 상쇄되므로 계좌 오라클(차이 0)이 유지된다.
+  const net = repaid.filter((r) => r.type === 'transfer').reduce((t, r) => t + signedAmount(r), 0);
+  assert.equal(net, 0);
+});
+
 test('잔액 열이 있어도 가져오기는 그대로 동작한다', () => {
   const rows = [normalise({ ...base, account: '현금', amount: 1735, type: 'expense', category: '식비' })];
   const parsed = parseImport(toCsv(rows), 'ledger.csv');
@@ -349,4 +400,19 @@ test('JSON backup round trips losslessly', () => {
 
 test('import rejects malformed JSON files', () => {
   assert.throws(() => parseImport('{"nope": 1}', 'backup.json'));
+});
+
+test('새로 추가된 계좌는 이미 쓰던 설치에도 한 번 들어간다', () => {
+  // 앱을 쓰던 기기: 자기 계좌 목록을 들고 있어 기본값 변경이 닿지 않는다.
+  saveSettings({ accounts: ['현금', '은행'], seededAccounts: [] });
+
+  const seeded = seedAccounts();
+  for (const name of SEEDED_ACCOUNTS) assert.ok(seeded.accounts.includes(name), name);
+  // 원래 쓰던 계좌는 그대로 남는다.
+  assert.deepEqual(seeded.accounts.slice(0, 2), ['현금', '은행']);
+
+  // 일부러 지웠으면 다음 실행에서 되살리지 않는다.
+  saveSettings({ accounts: ['현금', '은행'] });
+  assert.deepEqual(seedAccounts().accounts, ['현금', '은행']);
+  assert.deepEqual(loadSettings().accounts, ['현금', '은행']);
 });
