@@ -1,5 +1,5 @@
 // Offline shell. Bump CACHE when any precached file changes.
-const CACHE = 'cas-man-v4';
+const CACHE = 'cas-man-v5';
 
 // Relative URLs so the app works from any path on any static host.
 const SHELL = [
@@ -21,7 +21,8 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
+      // Straight from the server, or a new worker could install last deploy's files.
+      .then((cache) => cache.addAll(SHELL.map((url) => new Request(url, { cache: 'reload' }))))
       .then(() => self.skipWaiting()),
   );
 });
@@ -34,6 +35,25 @@ self.addEventListener('activate', (event) => {
       .then(() => self.clients.claim()),
   );
 });
+
+/**
+ * The same response, marked for revalidation.
+ *
+ * The page keeps its own in-memory copy of each script and reuses it on a
+ * refresh for as long as the headers say it is fresh — without asking this
+ * worker at all. Passed through as-is, GitHub's max-age=600 would let a
+ * refresh run the old modules for ten minutes after a deploy.
+ */
+function revalidated(response) {
+  if (!response.ok || response.type !== 'basic') return response;
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'no-cache');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
@@ -49,22 +69,36 @@ self.addEventListener('fetch', (event) => {
   // who had opened the app before. Correct code matters more here than saving
   // a few KB on a page this small, and offline still works through the
   // fallback below.
+  //
+  // "Network" has to mean the server, not the browser's HTTP cache: GitHub
+  // Pages sends max-age=600, so a plain fetch kept handing back the old files
+  // for ten minutes after a deploy — a refresh showed the old app. no-cache
+  // revalidates every time; an unchanged file costs only a 304 on its ETag.
+  // A navigation request cannot be re-issued with options, so it goes by URL.
+  // The response is then marked no-cache too (revalidated()), or the page's
+  // own memory cache would skip this worker on the next refresh.
+  const fresh =
+    request.mode === 'navigate'
+      ? fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' })
+      : fetch(new Request(request, { cache: 'no-cache' }));
+
   event.respondWith(
-    fetch(request)
+    fresh
       .then((response) => {
         if (response.ok && response.type === 'basic') {
           const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put(request, copy));
         }
-        return response;
+        return revalidated(response);
       })
       .catch(async () => {
         const cached = await caches.match(request, { ignoreSearch: true });
-        if (cached) return cached;
+        if (cached) return revalidated(cached);
         // Navigations carry the widget/share query string; any cached shell
         // will do, since the app reads those parameters itself.
         if (request.mode === 'navigate') {
-          return caches.match('index.html', { ignoreSearch: true });
+          const shell = await caches.match('index.html', { ignoreSearch: true });
+          if (shell) return revalidated(shell);
         }
         return Response.error();
       }),

@@ -520,7 +520,8 @@ function renderHistory() {
   const d = new Date(state.month);
   $('month-label').textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
 
-  const records = visibleRows(monthRecords());
+  const month = monthRecords();
+  const records = visibleRows(month);
   // Cash that left and arrived as spending and income. 이체 moves money between
   // accounts — 잔고보정 included — so it is neither; and a row on a bank is not
   // cash at all.
@@ -549,10 +550,14 @@ function renderHistory() {
     const day = formatDate(record.ts);
     if (day !== currentDay) {
       currentDay = day;
-      // 수입 − 지출 for the day, the same sum as the month's 합계; 이체 is
-      // neither, so it stays out here too.
-      const dayTotal = cash
-        .filter((r) => formatDate(r.ts) === day && (r.type === 'expense' || r.type === 'income'))
+      // How much the wallet moved that day: every 현금 row, 이체 included — an
+      // ATM withdrawal or a 와리깡 repayment is cash in hand even though it is
+      // not 수입. It is the + and − of the lines below added up, so the days
+      // add up to the change in the 현금 balance. Read off the whole month, not
+      // the listed rows: the list shows one half of each 이체, and for a
+      // withdrawal the cash half is the one left out.
+      const dayTotal = month
+        .filter((r) => formatDate(r.ts) === day && r.account === CASH)
         .reduce((sum, r) => sum + signedAmount(r), 0);
       const heading = document.createElement('div');
       heading.className = 'daygroup';
