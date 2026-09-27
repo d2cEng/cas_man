@@ -549,12 +549,14 @@ function renderHistory() {
     const day = formatDate(record.ts);
     if (day !== currentDay) {
       currentDay = day;
+      // 수입 − 지출 for the day, the same sum as the month's 합계; 이체 is
+      // neither, so it stays out here too.
       const dayTotal = cash
-        .filter((r) => formatDate(r.ts) === day && r.type === 'expense')
-        .reduce((sum, r) => sum + r.amount, 0);
+        .filter((r) => formatDate(r.ts) === day && (r.type === 'expense' || r.type === 'income'))
+        .reduce((sum, r) => sum + signedAmount(r), 0);
       const heading = document.createElement('div');
       heading.className = 'daygroup';
-      heading.innerHTML = `<span>${day}</span><span>${escapeHtml(money(dayTotal))}</span>`;
+      heading.innerHTML = `<span>${day}</span><span>${dayTotal > 0 ? '+' : ''}${escapeHtml(money(dayTotal))}</span>`;
       host.appendChild(heading);
     }
     host.appendChild(renderRow(record));
