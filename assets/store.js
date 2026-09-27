@@ -111,6 +111,53 @@ export function feeAccountFor(from, to) {
 }
 
 /**
+ * 거래처 of a 잔고보정 row: the gap between the cash counted in the wallet and
+ * the cash on record, closed at the moment it was counted.
+ *
+ * Written as a 이체 on 현금 with no other side — how the workbook already
+ * records its own balance corrections (정산오차, 잔고조정) — so it moves the
+ * cash balance without passing as 지출 or 수입. The first one, on a ledger with
+ * nothing before it, is simply the opening balance.
+ */
+export const CORRECTION_PAYEE = '잔고보정';
+
+export function isCorrection(record) {
+  return (
+    record.account === CASH &&
+    record.type === 'transfer' &&
+    !record.group &&
+    record.payee === CORRECTION_PAYEE
+  );
+}
+
+/** Cash on record at `ts`: every live 현금 row up to and including that moment. */
+export function cashBalanceAt(records, ts) {
+  return records
+    .filter((r) => !r.deleted && r.account === CASH && r.ts <= ts)
+    .reduce((total, r) => total + signedAmount(r), 0);
+}
+
+/**
+ * The 잔고보정 row that brings the record to `counted` at `ts`, or null when
+ * they already agree.
+ */
+export function correctionFor(records, counted, ts, source = '현금장부') {
+  const diff = Math.round(counted) - cashBalanceAt(records, ts);
+  if (!diff) return null;
+  return {
+    ts,
+    account: CASH,
+    amount: Math.abs(diff),
+    type: 'transfer',
+    direction: diff > 0 ? 'in' : 'out',
+    category: '이체',
+    payee: CORRECTION_PAYEE,
+    memo: `지갑 실사 ${Math.round(counted).toLocaleString('en-US')}`,
+    source,
+  };
+}
+
+/**
  * Accounts renamed after they had already reached a device.
  *
  * Changing DEFAULT_ACCOUNTS only affects a fresh install, so a rename has to
@@ -151,9 +198,6 @@ const DEFAULT_SETTINGS = {
   // cash from the bank. Defaulting to that saves two taps on the common case.
   transferFrom: '은행',
   transferTo: '현금',
-  // Id of the 잔고신고 row, so re-saving the opening balance edits the same
-  // record instead of stacking up a new one each time.
-  openingId: '',
   // Ids deleted here but not yet deleted in the cloud. Deleted rows are removed
   // outright rather than kept as tombstones, so this queue is the only thing
   // that stops the next sync from pulling them back; it is emptied as soon as
@@ -410,6 +454,36 @@ export async function commitEdit(rows, retiredIds = []) {
  * pushed them to the cloud without it. Deleting them properly also tombstones
  * the cloud copy.
  */
+/**
+ * Turn an older 잔고신고 into a 잔고보정.
+ *
+ * The starting cash used to be declared as a 수입 (거래처 잔고신고). It was
+ * never income — the money was already in the wallet — and counting it as
+ * such inflated the month's 수입. It is now the first 잔고보정, a 이체 like any
+ * later count. commitEdit bumps updatedAt, so the change reaches the cloud.
+ */
+export async function migrateOpening(source = '현금장부') {
+  const old = (await allRaw()).filter(
+    (r) =>
+      !r.deleted &&
+      r.account === CASH &&
+      r.type === 'income' &&
+      r.payee === '잔고신고' &&
+      r.source === source,
+  );
+  if (!old.length) return 0;
+  await commitEdit(
+    old.map((r) => ({
+      ...r,
+      type: 'transfer',
+      direction: 'in',
+      payee: CORRECTION_PAYEE,
+      memo: '기초 잔액',
+    })),
+  );
+  return old.length;
+}
+
 export async function purgeDeleted() {
   const stale = (await allRaw()).filter((r) => r.deleted).map((r) => r.id);
   await hardDelete(stale);

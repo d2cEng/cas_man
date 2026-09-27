@@ -616,7 +616,18 @@ body[data-type='income'] .amount {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
+  font: inherit;
   font-size: 13px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.balance::after {
+  content: '보정';
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .balance--cash {

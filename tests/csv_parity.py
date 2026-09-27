@@ -23,13 +23,14 @@ from fetch_firestore import csv_filename, to_csv, unexported_entries  # noqa: E4
 
 JST = timezone(timedelta(hours=9))
 
-# Deliberately awkward: a 이체 pair with its fee (the bank rows must drop out
+# Deliberately awkward: a 잔고보정 (a 이체 with no other side, and a comma in
+# 비고), a 이체 pair with its fee (the bank rows must drop out
 # and the cash row must name the bank), a 와리깡 pair going the other way with a
 # 비고 already set, a tombstone, a comma and quotes in 비고, two rows sharing a
 # timestamp, and an opening balance.
 RECORDS = [
-    {"id": "o", "ts": 1757116800000, "account": "현금", "amount": 50000, "type": "income",
-     "direction": "out", "category": "수입", "payee": "잔고신고", "memo": "잔고",
+    {"id": "o", "ts": 1757116800000, "account": "현금", "amount": 50000, "type": "transfer",
+     "direction": "in", "category": "이체", "payee": "잔고보정", "memo": "지갑 실사 50,000",
      "source": "현금장부", "deleted": False},
     {"id": "t1", "ts": 1757203200000, "account": "은행", "amount": 30000, "type": "transfer",
      "direction": "out", "category": "이체", "payee": "ATM", "memo": "",

@@ -67,7 +67,7 @@ def for_export(records: list[dict]) -> list[dict]:
     records = [r for r in records if not r.get("deleted")]
     halves: dict[str, list[dict]] = {}
     for record in records:
-        if record.get("type") == "transfer" and record.get("group"):
+        if record.get("group"):
             halves.setdefault(record["group"], []).append(record)
 
     exported = []
@@ -104,13 +104,18 @@ def counterpart_note(record: dict, halves: dict[str, list[dict]]) -> str:
     """
     if record.get("type") != "transfer" or not record.get("group"):
         return ""
+    group = halves.get(record["group"], [])
     other = next(
-        (r for r in halves.get(record["group"], []) if r.get("direction") != record.get("direction")),
+        (r for r in group if r.get("type") == "transfer" and r.get("direction") != record.get("direction")),
         None,
     )
     if other is None or other.get("account") in EXPORTED_ACCOUNTS:
         return ""
-    return f"(짝: {other.get('account', '')} {signed_amount(other):,})"
+    # The bank lost the fee on top of the amount; naming it lets the ledger match
+    # a statement line that shows the two together.
+    fee = next((r for r in group if r.get("type") == "expense" and r.get("account") == other.get("account")), None)
+    fee_text = f" · 수수료 {signed_amount(fee):,}" if fee else ""
+    return f"(짝: {other.get('account', '')} {signed_amount(other):,}{fee_text})"
 
 
 def to_csv(records: list[dict], tz: timezone) -> str:

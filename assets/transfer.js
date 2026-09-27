@@ -44,9 +44,14 @@ function escapeCell(value) {
  */
 function counterpartNote(record, halves) {
   if (record.type !== 'transfer' || !record.group) return '';
-  const other = (halves.get(record.group) || []).find((r) => r.direction !== record.direction);
+  const group = halves.get(record.group) || [];
+  const other = group.find((r) => r.type === 'transfer' && r.direction !== record.direction);
   if (!other || isExported(other.account)) return '';
-  return `(짝: ${other.account} ${signedAmount(other).toLocaleString('en-US')})`;
+  // The bank lost the fee on top of the amount; naming it lets the ledger match
+  // a statement line that shows the two together (-10,220 for 10,000 + 220).
+  const fee = group.find((r) => r.type === 'expense' && r.account === other.account);
+  const feeText = fee ? ` · 수수료 ${signedAmount(fee).toLocaleString('en-US')}` : '';
+  return `(짝: ${other.account} ${signedAmount(other).toLocaleString('en-US')}${feeText})`;
 }
 
 /**
@@ -62,7 +67,7 @@ function forExport(records) {
   const live = records.filter((r) => !r.deleted);
   const halves = new Map();
   for (const r of live) {
-    if (r.type !== 'transfer' || !r.group) continue;
+    if (!r.group) continue;
     if (!halves.has(r.group)) halves.set(r.group, []);
     halves.get(r.group).push(r);
   }

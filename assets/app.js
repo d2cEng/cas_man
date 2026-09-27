@@ -2,11 +2,15 @@
 
 import {
   CASH,
+  cashBalanceAt,
   commitEdit,
+  correctionFor,
   CURRENCIES,
   DEFAULT_ACCOUNTS,
   feeAccountFor,
+  isCorrection,
   isExported,
+  migrateOpening,
   purgeDeleted,
   DEFAULT_CATEGORIES,
   TYPES,
@@ -363,7 +367,7 @@ async function saveTransfer(common) {
   // 이체, is among the replaced ids and not rewritten, so it is removed.
   await commitEdit(rows, replacedIds());
 
-  const note = fee > 0 ? ` (수수료 ${money(fee)} 별도 기록)` : '';
+  const note = fee > 0 ? ` (수수료 ${money(fee)} 은 ${feeAccountFor(from, to)}에서)` : '';
   toast(
     state.editingGroup ? `이체를 수정했습니다${note}` : `${from} → ${to} ${money(common.amount)}${note}`,
     'ok',
@@ -373,6 +377,13 @@ async function saveTransfer(common) {
 }
 
 async function editRecord(record) {
+  // A 잔고보정 has no other side for the form to show; it is redone by
+  // counting again, or removed with ×.
+  if (isCorrection(record)) {
+    toast('잔고보정 기록입니다. 지우려면 ×, 다시 맞추려면 현금 잔액을 누르세요');
+    return;
+  }
+
   state.editingId = record.id;
   state.editingGroup = null;
   state.counterAccount = '';
@@ -457,7 +468,19 @@ function displaySign(record, counterpart) {
  * that happened, so only its outgoing half is listed.
  */
 function visibleRows(records) {
-  return records.filter((r) => !(r.type === 'transfer' && r.group && r.direction === 'in'));
+  return records.filter(
+    (r) =>
+      !(r.type === 'transfer' && r.group && r.direction === 'in') &&
+      // An ATM fee comes out of the bank, not the wallet: it is shown on its
+      // 이체's line, not as cash spent.
+      !(r.type === 'expense' && r.group && !isExported(r.account)),
+  );
+}
+
+/** The ATM fee filed with a 이체, if any. */
+function feeOf(record) {
+  if (record.type !== 'transfer' || !record.group) return null;
+  return state.records.find((r) => r.group === record.group && r.type === 'expense') || null;
 }
 
 /**
@@ -474,8 +497,12 @@ function renderBalances() {
     .filter((record) => record.account === home)
     .reduce((total, record) => total + signedAmount(record), 0);
 
-  const chip = document.createElement('div');
+  // Tapping the balance is where you notice it is off, so it opens 잔고 보정.
+  const chip = document.createElement('button');
+  chip.type = 'button';
   chip.className = 'balance balance--cash';
+  chip.title = '지갑과 다르면 눌러서 보정';
+  chip.addEventListener('click', openCorrection);
 
   const name = document.createElement('span');
   name.className = 'balance__name';
@@ -494,9 +521,12 @@ function renderHistory() {
   $('month-label').textContent = `${d.getFullYear()}년 ${d.getMonth() + 1}월`;
 
   const records = visibleRows(monthRecords());
-  // 이체 moves money between accounts, so it is not spending.
-  const expense = records.filter((r) => r.type === 'expense').reduce((sum, r) => sum + r.amount, 0);
-  const income = records.filter((r) => r.type === 'income').reduce((sum, r) => sum + r.amount, 0);
+  // Cash that left and arrived as spending and income. 이체 moves money between
+  // accounts — 잔고보정 included — so it is neither; and a row on a bank is not
+  // cash at all.
+  const cash = records.filter((r) => isExported(r.account));
+  const expense = cash.filter((r) => r.type === 'expense').reduce((sum, r) => sum + r.amount, 0);
+  const income = cash.filter((r) => r.type === 'income').reduce((sum, r) => sum + r.amount, 0);
   $('sum-expense').textContent = num.format(expense);
   $('sum-income').textContent = num.format(income);
   $('sum-net').textContent = num.format(income - expense);
@@ -519,7 +549,7 @@ function renderHistory() {
     const day = formatDate(record.ts);
     if (day !== currentDay) {
       currentDay = day;
-      const dayTotal = records
+      const dayTotal = cash
         .filter((r) => formatDate(r.ts) === day && r.type === 'expense')
         .reduce((sum, r) => sum + r.amount, 0);
       const heading = document.createElement('div');
@@ -543,7 +573,13 @@ function renderRow(record) {
   const title = record.payee || record.category;
   const counterpart = counterpartOf(record);
   const where = counterpart ? `${record.account} → ${counterpart}` : record.account;
-  const sub = [where, record.payee ? record.category : '', record.memo]
+  const fee = feeOf(record);
+  const sub = [
+    where,
+    record.payee ? record.category : '',
+    fee ? `수수료 ${num.format(fee.amount)} (${fee.account}에서)` : '',
+    record.memo,
+  ]
     .filter(Boolean)
     .join(' · ');
   main.innerHTML = `
@@ -648,44 +684,40 @@ function renderDefaultAccount() {
 }
 
 /**
- * The 잔고신고 row: how much cash was in the wallet when this ledger started.
+ * 잔고 보정: count the wallet, and the gap to the record is written down.
  *
- * It is an ordinary record dated before everything else, written the way the
- * workbook already declares balances (거래처 잔고신고 · 범주 수입 · 비고 잔고), so
- * the running 잔액 lines up with the cash actually in hand — and the ledger
- * session recognises it without being told.
+ * The status line always says what saving would do, so the number typed is
+ * checked against the record before anything is written. It never clears the
+ * count being typed — refresh() calls this whenever any record changes.
  */
-const OPENING = { payee: '잔고신고', memo: '잔고', account: '현금' };
+function renderCorrection() {
+  const date = $('correction-date');
+  if (!date.value) date.value = toLocalInput(Date.now());
+  const ts = fromLocalInput(date.value);
+  const onRecord = cashBalanceAt(state.records, ts);
 
-function toDateInput(ts) {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** The day before the earliest record, so the opening balance sorts first. */
-function defaultOpeningDate() {
-  const others = state.records.filter((r) => r.id !== state.settings.openingId);
-  if (!others.length) return toDateInput(Date.now());
-  const earliest = Math.min(...others.map((r) => r.ts));
-  return toDateInput(earliest - 86400000);
-}
-
-async function renderOpening() {
-  const amount = $('opening-amount');
-  const date = $('opening-date');
-  const status = $('opening-status');
-
-  const existing = state.settings.openingId ? await get(state.settings.openingId) : null;
-
-  if (existing && !existing.deleted) {
-    amount.value = existing.amount;
-    date.value = toDateInput(existing.ts);
-    status.textContent = `${toDateInput(existing.ts)} 기준 ${money(existing.amount)} 로 기록되어 있습니다.`;
-  } else {
-    amount.value = '';
-    date.value = defaultOpeningDate();
-    status.textContent = '아직 설정하지 않았습니다. 비워두면 0에서 시작합니다.';
+  const typed = $('correction-amount').value.trim();
+  const status = $('correction-status');
+  if (typed === '') {
+    const last = state.records.filter(isCorrection).sort((a, b) => b.ts - a.ts)[0];
+    status.textContent =
+      `기록상 현금 ${money(onRecord)}.` +
+      (last ? ` 마지막 보정 ${formatDate(last.ts)}.` : ' 아직 보정한 적이 없습니다.');
+    return;
   }
+  const diff = Math.round(Number(typed) || 0) - onRecord;
+  status.textContent = diff
+    ? `기록상 ${money(onRecord)} → 차액 ${diff > 0 ? '+' : ''}${num.format(diff)} 을(를) 보정합니다.`
+    : `기록상 ${money(onRecord)} 와 같습니다. 보정할 것이 없습니다.`;
+}
+
+/** Straight to the 잔고 보정 card, ready for the count. */
+function openCorrection() {
+  showView('settings');
+  const card = $('correction-card');
+  card.open = true;
+  card.scrollIntoView({ block: 'start' });
+  $('correction-amount').focus();
 }
 
 function renderSyncState() {
@@ -914,7 +946,7 @@ function showView(name) {
   if (name === 'history') renderHistory();
   if (name === 'settings') {
     renderInstallState();
-    renderOpening();
+    renderCorrection();
     renderCategoryEditor();
     renderAccountEditor();
     renderDefaultAccount();
@@ -1160,33 +1192,28 @@ function wire() {
     renderWidgetUrl();
   });
 
-  $('opening-save').addEventListener('click', async () => {
-    const amount = Math.round(Math.abs(Number($('opening-amount').value) || 0));
-    if (amount <= 0) {
-      toast('금액을 입력하세요', 'warn');
+  for (const id of ['correction-amount', 'correction-date']) {
+    $(id).addEventListener('input', renderCorrection);
+  }
+
+  $('correction-save').addEventListener('click', async () => {
+    const typed = $('correction-amount').value.trim();
+    const counted = Math.round(Number(typed));
+    if (typed === '' || !Number.isFinite(counted) || counted < 0) {
+      toast('지갑에 있는 현금을 입력하세요', 'warn');
       return;
     }
-    const ts = fromLocalInput(`${$('opening-date').value}T00:00`);
-    const saved = await put({
-      ...OPENING,
-      id: state.settings.openingId || newId(),
-      ts,
-      amount,
-      type: 'income',
-      source: state.settings.source,
-    });
-    state.settings = saveSettings({ openingId: saved.id });
-    await renderOpening();
-    toast(`기초 잔액을 ${money(amount)} 로 설정했습니다`, 'ok');
-    backgroundSync();
-  });
-
-  $('opening-clear').addEventListener('click', async () => {
-    if (!state.settings.openingId) return;
-    await remove(state.settings.openingId);
-    state.settings = saveSettings({ openingId: '' });
-    await renderOpening();
-    toast('기초 잔액을 삭제했습니다');
+    const ts = fromLocalInput($('correction-date').value);
+    const row = correctionFor(state.records, counted, ts, state.settings.source);
+    if (!row) {
+      toast('기록과 이미 맞습니다', 'ok');
+      return;
+    }
+    await put({ ...row, id: newId() });
+    const signed = `${row.direction === 'in' ? '+' : '-'}${num.format(row.amount)}`;
+    $('correction-amount').value = '';
+    $('correction-date').value = '';
+    toast(`잔고보정 ${signed} 을(를) 기록했습니다. 현금 ${money(counted)}`, 'ok');
     backgroundSync();
   });
 
@@ -1263,7 +1290,7 @@ async function refresh() {
   if (!$('view-history').hidden) renderHistory();
   if (!$('view-settings').hidden) {
     renderStats();
-    renderOpening();
+    renderCorrection();
   }
 }
 
@@ -1274,6 +1301,7 @@ async function main() {
   await purgeDeleted().catch(() => {
     /* IndexedDB unavailable — nothing stored to clean */
   });
+  await migrateOpening(state.settings.source).catch(() => {});
 
   wire();
   wireInstall();

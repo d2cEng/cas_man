@@ -29,6 +29,9 @@ const {
   SEEDED_ACCOUNTS,
   RENAMED_ACCOUNTS,
   feeAccountFor,
+  correctionFor,
+  cashBalanceAt,
+  isCorrection,
 } = await import('../assets/store.js');
 const { toCsv, parseImport, toJson, csvFilename, handoffSummary, formatDate, closingBalances, unexportedEntries } =
   await import('../assets/transfer.js');
@@ -244,21 +247,22 @@ test('내보내기는 현금 행만 담고 이체 상대 계좌는 비고에 적
 
   assert.deepEqual(lines.slice(1), [
     // 은행 쪽 행 없이, 어디서 왔는지는 비고에. 잔액 열은 현금 누계.
-    '2026-09-01,현금,30000,ATM,이체,현금장부,"(짝: 은행 -30,000)",30000',
+    // 통장에서는 30,220 이 빠졌다: 인출 30,000 + 수수료 220.
+    '2026-09-01,현금,30000,ATM,이체,현금장부,"(짝: 은행 -30,000 · 수수료 -220)",30000',
     '2026-09-03,현금,-1735,세븐일레븐,식비,현금장부,,28265',
   ]);
   assert.equal(csvFilename(rows), '현금장부_20260901-20260903_2건.csv');
 });
 
-test('기초 잔액(잔고신고) 행이 누계의 시작점이 된다', () => {
+test('첫 잔고보정이 누계의 시작점이 된다', () => {
   const rows = [
-    normalise({ ...base, id: 'o', ts: Date.parse('2024-01-02T00:00'), account: '현금', amount: 50000, type: 'income', payee: '잔고신고', memo: '잔고' }),
+    normalise({ ...base, id: 'o', ts: Date.parse('2024-01-02T00:00'), ...correctionFor([], 50000, Date.parse('2024-01-02T00:00')) }),
     normalise({ ...base, id: 'a', ts: Date.parse('2024-01-05T12:00'), account: '현금', amount: 1735, type: 'expense', category: '식비', payee: '', memo: '' }),
   ];
   const lines = toCsv(rows).replace(/^\ufeff/, '').split('\r\n');
 
-  // 워크북이 잔고를 선언하는 방식 그대로: 거래처 잔고신고 · 범주 수입 · 비고 잔고
-  assert.equal(lines[1], '2024-01-02,현금,50000,잔고신고,수입,현금장부,잔고,50000');
+  // 워크북이 잔액을 보정하는 방식 그대로: 현금 · 거래처 잔고보정 · 범주 이체 (수입 아님)
+  assert.equal(lines[1], '2024-01-02,현금,50000,잔고보정,이체,현금장부,"지갑 실사 50,000",50000');
   assert.equal(lines[2], '2024-01-05,현금,-1735,,식비,현금장부,,48265');
 });
 
@@ -488,7 +492,7 @@ test('입금 수수료는 현금으로 내보내지 않는다', () => {
     normalise({ ...base, id: 'f', ts: at, account: feeAccountFor('현금', '로킨'), amount: 110, type: 'expense', category: '기타', group: 'g', payee: 'ATM', memo: '수수료' }),
   ];
   const lines = toCsv(rows).replace(/^\ufeff/, '').split('\r\n').filter(Boolean);
-  assert.deepEqual(lines.slice(1), ['2026-09-01,현금,-20000,ATM,이체,현금장부,"(짝: 로킨 20,000)",-20000']);
+  assert.deepEqual(lines.slice(1), ['2026-09-01,현금,-20000,ATM,이체,현금장부,"(짝: 로킨 20,000 · 수수료 -110)",-20000']);
   assert.deepEqual(unexportedEntries(rows), []);
 });
 
@@ -525,4 +529,33 @@ test('지출·수입의 기본 계좌는 내보내는 계좌여야 하고 현금
   const settings = loadSettings();
   assert.equal(settings.defaultAccount, '현금');
   assert.ok(settings.accounts.includes('현금'));
+});
+
+test('잔고보정은 센 시각까지의 기록과의 차이만 적는다', () => {
+  const at = (d) => Date.parse(d);
+  const rows = [
+    normalise({ ...base, id: 'a', ts: at('2026-09-01T09:00'), account: '현금', amount: 10000, type: 'transfer', direction: 'in', group: 'g' }),
+    normalise({ ...base, id: 'b', ts: at('2026-09-01T09:00'), account: '로킨', amount: 10000, type: 'transfer', direction: 'out', group: 'g' }),
+    normalise({ ...base, id: 'f', ts: at('2026-09-01T09:00'), account: '로킨', amount: 220, type: 'expense', category: '기타', group: 'g', memo: '수수료' }),
+    normalise({ ...base, id: 'c', ts: at('2026-09-02T12:00'), account: '현금', amount: 1400, type: 'expense', category: '식비' }),
+    normalise({ ...base, id: 'l', ts: at('2026-09-05T12:00'), account: '현금', amount: 999, type: 'expense', category: '식비' }),
+  ];
+  const ts = at('2026-09-03T20:00');
+  // 통장 수수료는 현금이 아니다. 10,000 − 1,400 = 8,600, 그 뒤 기록은 셈하지 않는다.
+  assert.equal(cashBalanceAt(rows, ts), 8600);
+
+  // 지갑엔 8,500 — 100 이 모자란다.
+  const short = normalise({ ...base, id: 'k', ...correctionFor(rows, 8500, ts) });
+  assert.deepEqual([short.type, short.direction, short.amount, short.payee, short.category], ['transfer', 'out', 100, '잔고보정', '이체']);
+  assert.equal(short.memo, '지갑 실사 8,500');
+  assert.equal(signedAmount(short), -100);
+  assert.ok(isCorrection(short));
+  assert.equal(cashBalanceAt([...rows, short], ts), 8500);
+
+  // 남는 쪽도, 맞을 때는 아무것도 적지 않는다.
+  assert.equal(signedAmount(normalise({ ...base, ...correctionFor(rows, 8700, ts) })), 100);
+  assert.equal(correctionFor(rows, 8600, ts), null);
+
+  // 이체라서 지출·수입 합계에 섞이지 않는다.
+  assert.match(handoffSummary([...rows, short]), /지출 합계: 2,399/);
 });

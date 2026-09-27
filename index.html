@@ -62,7 +62,7 @@
               type="number"
               inputmode="numeric"
               min="0"
-              placeholder="수수료 (선택, 예: 220)"
+              placeholder="ATM 수수료 — 통장에서 빠진 돈 (선택, 예: 220)"
               autocomplete="off"
               hidden
             />
@@ -183,30 +183,30 @@
 
         <h2 class="section">장부 설정</h2>
 
-        <details class="card">
-          <summary class="card__title">현금 기초 잔액</summary>
+        <details class="card" id="correction-card">
+          <summary class="card__title">잔고 보정</summary>
           <p class="card__note">
-            이 앱을 쓰기 시작한 시점에 지갑에 있던 현금입니다. 넣어두면 잔액이 실제 지갑과 바로
-            맞아떨어져, 차이가 곧 빠뜨린 지출이 됩니다. 워크북과 같은 방식으로
-            <code>거래처 잔고신고 · 범주 수입 · 비고 잔고</code> 인 기록 한 건으로 남습니다.
+            지갑에 있는 현금을 세어 넣으면, 기록상 잔액과의 <strong>차이만큼</strong> 보정 기록이
+            들어갑니다. 처음 쓸 때 넣으면 그대로 기초 잔액이 되고, 이후에는 안 맞을 때마다 넣으면
+            됩니다. 워크북의 잔액 보정과 같은 방식으로 <code>거래처 잔고보정 · 범주 이체</code> 인
+            기록으로 남아 지출·수입 집계에는 들어가지 않습니다.
           </p>
           <div class="row">
             <input
               class="field"
-              id="opening-amount"
+              id="correction-amount"
               type="number"
               inputmode="numeric"
               min="0"
-              placeholder="금액"
+              placeholder="지갑에 있는 현금"
               autocomplete="off"
             />
-            <input class="field" id="opening-date" type="date" aria-label="기준일" />
+            <input class="field" id="correction-date" type="datetime-local" aria-label="센 시각" />
           </div>
           <div class="row">
-            <button class="btn" id="opening-save" type="button">저장</button>
-            <button class="btn btn--ghost" id="opening-clear" type="button">삭제</button>
+            <button class="btn btn--primary" id="correction-save" type="button">보정</button>
           </div>
-          <p class="card__note" id="opening-status"></p>
+          <p class="card__note" id="correction-status"></p>
         </details>
 
         <details class="card">
@@ -263,7 +263,7 @@
           <p class="card__note">
             <strong>거래내역 CSV</strong> — A~G열이 워크북 「거래내역」 시트와 같은 순서라 그대로
             붙습니다. <strong>현금과 와리깡 행만</strong> 담기며, 은행에서 온 이체는 비고에
-            <code>(짝: 로킨 -17,000)</code> 처럼 어디서 왔는지가 적힙니다. H열 <code>잔액</code> 은
+            <code>(짝: 로킨 -10,000 · 수수료 -220)</code> 처럼 어디서 왔는지가 적힙니다. H열 <code>잔액</code> 은
             계좌별 누계로, 현금은 지갑과 대조하라고 붙인 파생값입니다. 파일명에 기간·건수가 들어가 <code>archive/</code> 에 그냥 쌓아도 됩니다.
           </p>
           <div class="row">
